@@ -23,10 +23,9 @@ def get_args():
     # prompt learning
     parser.add_argument("--p_tuning", type=bool, default=True)
     parser.add_argument("--relation_pseudo_token", type=str, default='[PROMPT]')
-    parser.add_argument("--entity_pseudo_token", type=str, default='[PROMPT_E]')
+    parser.add_argument("--entity_split_token", type=str, default='[ENTITY_SPLIT]')
     
-    parser.add_argument("--template", type=str, default="(3, 3, 3, 3)")
-    parser.add_argument("--ner_template", type=str, default="(4, 4, 4)")
+    parser.add_argument("--template", type=str, default="(9)")
     
     # contractive learning
     parser.add_argument("--contrasive", type=bool, default=False)
@@ -48,10 +47,8 @@ def get_args():
     args = parser.parse_args()
 
     args.template = eval(args.template) if type(args.template) is not tuple else args.template
-    args.ner_template = eval(args.ner_template) if type(args.ner_template) is not tuple else args.ner_template
 
     assert type(args.template) is tuple
-    assert type(args.ner_template) is tuple
     return args
 
 class simple_model(torch.nn.Module):

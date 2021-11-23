@@ -1,3 +1,4 @@
+from json import decoder
 from urllib.parse import quote_from_bytes
 import torch.utils.data as data
 import torch
@@ -197,23 +198,30 @@ class FewShotNERDataset(data.Dataset):
             N, K, Q, self.samples, classes=self.classes)
         self.ignore_label_id = ignore_label_id
 
+        self.use_bart_augment=False
+
 
         self.encoder_name = encoder_name
         self.Ptuing = Ptuing
 
         if (self.Ptuing):
-            P_template_format = args.ner_template
-            self.tokenizer.add_special_tokens({'additional_special_tokens': [args.entity_pseudo_token]})
-            self.P_template_len = sum(P_template_format)
-            self.template_max_len = sum(P_template_format)
+            P_template_format = args.template
+            self.tokenizer.add_special_tokens({'additional_special_tokens': [args.entity_pseudo_token,args.entity_split_token]})
+            self.P_template_len = P_template_format
+            self.template_max_len = P_template_format
+            self.decoder_template = args.decoder_template
             self.entity_pseudo_token_id = self.tokenizer.get_vocab()[args.entity_pseudo_token]
+            self.entity_split_token_id= self.tokenizer.get_vocab()[args.entity_split_token]
+            self.entity_split_token=args.entity_split_token
             self.entity_pseudo_token=args.entity_pseudo_token
-            self.ner_template = args.ner_template
+            self.ner_template = args.template
         else:
             self.template_max_len = 15  # need edit
         assert self.template_max_len < max_length-2
 
         self.MASK = self.tokenizer.mask_token_id
+
+
         if self.encoder_name == 'bert':
             self.SEP = self.tokenizer.convert_tokens_to_ids(['[SEP]'])
             self.CLS = self.tokenizer.convert_tokens_to_ids(['[CLS]'])
@@ -221,24 +229,15 @@ class FewShotNERDataset(data.Dataset):
         else:
             self.SEP = self.tokenizer.convert_tokens_to_ids(['</s>'])
             self.CLS = self.tokenizer.convert_tokens_to_ids(['<s>'])
+            
 
-    def __get_question(self, question_name, entity):
+    def _get_encoder_ptuning_template(self,template_lenth):
         if self.Ptuing:
-            question_name = question_name.split('-')
             prompt_token=self.entity_pseudo_token
-            prompt = [[prompt_token] * self.ner_template[0]
-                        + entity    # entity
-                        + [prompt_token] * self.ner_template[1]
-                        + question_name   # entity type
-                        + [prompt_token] * self.ner_template[2]
-                        + ["?"]
-                    ]
+            prompt = [prompt_token] * template_lenth
+                    
             #raise NotImplementedError
-        else:
-            relation_id = self.__relation_name2ID__(question_name)
-            prompt = self.id2question[str(relation_id)]
-            prompt = self.encoder.tokenize_question(
-                prompt, entity)
+        
         return prompt
 
     def _get_entity_list (self,tokens,labels):
@@ -270,215 +269,56 @@ class FewShotNERDataset(data.Dataset):
 
         return entity_list,entity_label_list
 
-    def __mask__raw_token(self,raw,entity):
-        masked_tokens=raw.copy()
-        lenth=len(entity)
-        for i in range(len(masked_tokens)-lenth):
-            mask=True
-            for j in range(lenth):
-                if(entity[j]!=masked_tokens[i+j]):
-                    mask=False
-                    break
-            if(mask):
-                for j in range(lenth):
-                    masked_tokens[i+j]='<mask>'
-        return masked_tokens
+    # decoder sentence =[bos_id,entity_1,[prompt_token],entity_type,[entity_spilt_token],entity2,...,[eos_token]]
+    def __get_decoder_output_sentence_id(self,target_classes,entity_list,entity_label_list,raw_tokens):
+        decoder_input_sentence_id=[self.tokenizer.bos_token_id]
+        for i in range(len(entity_list)):
+            for j in range(entity_list[i][0],entity_list[i][1]):
+                decoder_input_sentence_id+=self.tokenizer.convert_tokens_to_ids([raw_tokens[j]])
+
+
+            decoder_input_sentence_id+=[self.entity_pseudo_token_id]*self.decoder_template
+            
+            tt= 'location-road/railway/highway/transit'
+            entity_type=target_classes[entity_label_list[i]-1].split('/')[0]
+            entity_type=entity_type.split('-')
+            
+            
+            decoder_input_sentence_id+=self.tokenizer.convert_tokens_to_ids(entity_type)
+
+
+            if(i!=len(entity_list)-1):
+                decoder_input_sentence_id+=self.entity_split_token_id
+        decoder_input_sentence_id+=[self.tokenizer.eos_token_id]
+        return decoder_input_sentence_id
                 
-    def __contact_question__for__bart(self, target_classes, raw_tokens, labels):
+    def __contact_template_for_bart(self, target_classes, raw_tokens, labels):
+        assert len(raw_tokens)==len(labels)
         assert 'bart' in self.encoder_name.lower()
         entity_list,entity_label_list=self._get_entity_list(raw_tokens,labels)
         return_dic={}
-        encoder_tensor_list=[]
-        decoder_tensor_list=[]
-        label_tensor_list = []
-        span_list = []
-        lmlabel_list=[]
-        e_label_list = []
-        origin_decode_tensor_list =[]
-        origin_encode_tensor_list=[]
-        mask_loc=[]
+        prompt = self._get_encoder_ptuning_template(self.P_template_len)
+        ori_input_token_id= self.tokenizer.convert_tokens_to_ids(raw_tokens)
+
+        if self.use_bart_augment:
+            pass
+
+
+
+        if self.Ptuing:
+            inserted_input_tokens = self.tokenizer.convert_tokens_to_ids(prompt+ raw_tokens)
+            return_encoder_sentence_id = [self.tokenizer.bos_token_id]+ inserted_input_tokens + [self.tokenizer.eos_token_id]
         
-        for i in range(len(entity_list)):
-            probably_entity = raw_tokens[entity_list[i][0]:entity_list[i][1]+1]
-            span_label = entity_label_list[i]
-            tmp_encode=[]
-            tmp_decode=[]
-            tmp_lmlabel=[]
-            tmp_elabel=[]
-            tmp_ori=[]
-            tmp_mask_loc=[]
-            tmp_ori_en=[]
-            index=0
-            span_list.append(entity_list[i])
-            label_tensor_list.append(span_label)
-            for class_name in target_classes:
-                question_tokens = self.tokenizer.convert_tokens_to_ids(self.__get_question(
-                        class_name, probably_entity)[0])
-                
-                #!masked_raw_token = self.__mask__raw_token(raw_tokens,probably_entity)
-                masked_raw_token=raw_tokens
+        else :
+            return_encoder_sentence_id = [self.tokenizer.bos_token_id]+ ori_input_token_id + [self.tokenizer.eos_token_id]
 
-                encoder_inputs = self.tokenizer.encode(masked_raw_token, add_special_tokens=False, max_length=self.max_length - 3-self.template_max_len) + [self.tokenizer.eos_token_id]
-                lm_label = self.tokenizer.encode(raw_tokens, add_special_tokens=False, max_length=self.max_length - 3-self.template_max_len) + [self.tokenizer.eos_token_id]
-                ori_encoder_inputs= [self.tokenizer.bos_token_id] + self.tokenizer.encode(raw_tokens, add_special_tokens=False, max_length=self.max_length - 3-self.template_max_len)
-                ori_decoder_inputs= [self.tokenizer.bos_token_id] + self.tokenizer.encode(raw_tokens, add_special_tokens=False, max_length=self.max_length - 3-self.template_max_len)+ [self.tokenizer.eos_token_id]
-                encoder_inputs = encoder_inputs + question_tokens + [self.MASK] + [self.tokenizer.eos_token_id]
-                
-                
-                if index == span_label:
-                    decoder_inputs= ori_decoder_inputs + question_tokens + self.tokenizer.convert_tokens_to_ids(['yes'])+ [self.tokenizer.eos_token_id]
-                    tmp_elabel.append(self.tokenizer.convert_tokens_to_ids(['yes']))
-                else:
-                    decoder_inputs= ori_decoder_inputs + question_tokens + self.tokenizer.convert_tokens_to_ids(['no'])+ [self.tokenizer.eos_token_id]
-                    tmp_elabel.append(self.tokenizer.convert_tokens_to_ids(['no']))
-                index+=1
+        decoder_input_sentence_id = self.__get_decoder_output_sentence_id(target_classes,entity_list,entity_label_list,raw_tokens)
+        
 
-                #print(self.tokenizer.convert_tokens_to_ids(['yes']))
-                assert len(decoder_inputs)==len(ori_decoder_inputs)+len(question_tokens)+2
-                #print(decoder_inputs[len(ori_decoder_inputs)+len(question_tokens)],self.tokenizer.convert_tokens_to_ids(['no']),self.tokenizer.convert_tokens_to_ids(['yes']))
-                
-                #assert -1==0
-                tmp_mask_loc.append(len(ori_decoder_inputs)+len(question_tokens))
-                tmp_lmlabel.append(lm_label)
-                tmp_encode.append(encoder_inputs)
-                tmp_decode.append(decoder_inputs)
-                tmp_ori.append(ori_decoder_inputs)
-                tmp_ori_en.append(ori_encoder_inputs)
-            origin_decode_tensor_list+=(tmp_ori)
-            e_label_list+=(tmp_elabel)
-            lmlabel_list+=(tmp_lmlabel)
-            encoder_tensor_list+=(tmp_encode)
-            decoder_tensor_list+=(tmp_decode)
-            origin_encode_tensor_list+=tmp_ori_en
-            mask_loc+=tmp_mask_loc
-        return_dic['encoder_tensor_list']=encoder_tensor_list
-        return_dic['decoder_tensor_list']=decoder_tensor_list
-        return_dic['span_list']=span_list
-        return_dic['label_tensor_list']=label_tensor_list
-        return_dic['lmlabel_list']=lmlabel_list
-        return_dic['e_label_list']=e_label_list
-        return_dic['origin_decode_tensor_list']=origin_decode_tensor_list
-        return_dic['origin_encode_tensor_list']=origin_encode_tensor_list
-        return_dic['mask_loc']=mask_loc
+        return_dic['origin_input_id'] = ori_input_token_id
+        return_dic['encoder_input_id']= return_encoder_sentence_id
+        return_dic['decoder_input_id']= decoder_input_sentence_id
         return return_dic
-
-
-    def __contact_question__for__bert(self, target_classes, raw_tokens, labels):
-        assert 'bert' in self.encoder_name.lower()
-        entity_list,entity_label_list=self._get_entity_list(raw_tokens,labels)
-        return_dic={}
-        masked_encoder_tensor_list=[]
-        encoder_tensor_word = []
-        span_list = []
-        label_tensor_list = []
-        masked_loc_list=[]
-        att_mask_list=[]
-
-        for i in range(len(entity_list)):
-            probably_entity = raw_tokens[entity_list[i][0]:entity_list[i][1]+1]
-            span_label = entity_label_list[i]
-            index=0
-            span_list.append(entity_list[i])
-            label_tensor_list.append(span_label)
-            tmp_masked_encode=[]
-            tmp_unmasked=[]
-            tmp_loc=[]
-            tmp_att=[]
-            for class_name in target_classes:
-                question_tokens = self.tokenizer.convert_tokens_to_ids(self.__get_question(
-                        class_name, probably_entity)[0])
-                ori_encoder_input= self.CLS + self.tokenizer.encode(raw_tokens, add_special_tokens=False, max_length=self.max_length - 3-self.template_max_len) + self.SEP +question_tokens
-                if index == labels[i]:
-                    lm_out = ori_encoder_input+self.tokenizer.convert_tokens_to_ids(['yes'])
-                else:
-                    lm_out = ori_encoder_input+self.tokenizer.convert_tokens_to_ids(['no'])
-                
-                index+=1
-                masked_encoder_input= ori_encoder_input + self.MASK
-                att_mask = [1]*len(masked_encoder_input)
-                masked_loc = len(ori_encoder_input)
-                tmp_masked_encode.append(masked_encoder_input)
-                tmp_unmasked.append(lm_out)
-                tmp_loc.append(masked_loc)
-                tmp_att.append(att_mask)
-            att_mask_list+=tmp_att
-            masked_encoder_tensor_list+=tmp_masked_encode
-            encoder_tensor_word+=tmp_unmasked
-            masked_loc_list+=tmp_loc
-        
-        return_dic['att_mask_list']=att_mask_list
-        return_dic['masked_encoder_tensor_list']=masked_encoder_tensor_list
-        return_dic['e_label_list']=encoder_tensor_word
-        return_dic['masked_loc']=masked_loc_list
-        return_dic['span_list']=span_list
-        return_dic['span_label']=label_tensor_list
-        return return_dic
-
-
-
-
-
-
-    # every word of raw_tokens probably is an entity, so if wanna get full template, we'll need to create N*K*(token_length)*n_gram filled
-    # teamplate (such a big data)
-    # assume it is a classification task 
-    def __contact_question__for__bert(self, target_classes, raw_tokens, labels):
-        # (n_gram_total_length,target_classes,seq_length)
-        word_tensor_list = []
-        mask_tensor_list = []
-        seg_tensor_list = []
-        label_tensor_list = []  # (n_gram_total_length,label_size)
-        span_list = []
-        
-        entity_list,entity_label_list=self._get_entity_list(raw_tokens,labels)
-        
-        for i in range(len(entity_list)):
-                tmp_mask = []
-                tmp_word = []  # (target_classes,seq_length)
-                tmp_seg = []
-                probably_entity = raw_tokens[entity_list[i][0]:entity_list[i][1]+1]  
-                span_label = entity_label_list[i]
-                
-                label_tensor_list.append(span_label)
-                span_list.append(entity_list[i])
-                
-                index=0
-                for class_name in target_classes:
-                    
-                    question_tokens = self.__get_question(
-                        class_name, probably_entity)
-
-                    
-                    inserted_qustion_tokens = self.CLS + \
-                        self.tokenizer.convert_tokens_to_ids(question_tokens) + self.SEP + \
-                        self.tokenizer.convert_tokens_to_ids(
-                            raw_tokens) + self.SEP
-                    
-                        
-                    
-                    word_tensor = torch.ones((self.max_length)).long()
-                    sentence_len = min(
-                        self.max_length, len(inserted_qustion_tokens))
-                    for ii in range(sentence_len):
-                        word_tensor[ii] = inserted_qustion_tokens[ii]
-
-                    mask_tensor = torch.zeros((self.max_length)).long()
-                    mask_tensor[:min(self.max_length, len(
-                        inserted_qustion_tokens))] = 1
-                    seg_tensor = torch.ones((self.max_length)).long()
-                    seg_tensor[:min(self.max_length, len(
-                        question_tokens) + 1)] = 0
-
-                    tmp_word.append(word_tensor.numpy().tolist())
-                    tmp_mask.append(mask_tensor.numpy().tolist())
-                    tmp_seg.append(seg_tensor.numpy().tolist())
-                    index+=1
-                    
-                word_tensor_list.append(tmp_word)
-                mask_tensor_list.append(tmp_mask)
-                seg_tensor_list.append(tmp_seg)
-
-        return word_tensor_list, mask_tensor_list, seg_tensor_list, label_tensor_list, span_list
 
     def __insert_sample__(self, index, sample_classes):
         for item in sample_classes:
@@ -550,7 +390,7 @@ class FewShotNERDataset(data.Dataset):
         for i, tokens in enumerate(tokens_list):
             # token -> ids
             # word_tensor_list()
-            word_tensor_list, mask_tensor_list, seg_tensor_list, label_tensor_list, span_tensor_list = self.__contact_question__for__bert(
+            word_tensor_list, mask_tensor_list, seg_tensor_list, label_tensor_list, span_tensor_list = self.__contact_template__for__bart(
                 target_classes, tokens, origin_labels_list[i])
             # print(word_tensor_list,labels_list,'112',span_tensor_list)
             assert(len(span_tensor_list) == len(label_tensor_list))
@@ -615,13 +455,11 @@ class FewShotNERDataset(data.Dataset):
             return_dic={}
             for idx in idx_list:
                 tokens, labels = self.__get_token_label_list__(self.samples[idx])
-                sample=self.__contact_question__for__bart(target_classes, tokens, labels)
+                sample=self.__contact_template_for_bart(target_classes, tokens, labels)
                 for key in sample:
                     if(key not in return_dic):return_dic[key]=[]
                     return_dic[key]+=sample[key]
             return return_dic
-
-
 
     def __getitem__(self, index):
         target_classes, support_idx, query_idx = self.sampler.__next__()
@@ -708,14 +546,14 @@ def get_args():
                         help="The input data dir.", )
     # prompt learning
     parser.add_argument("--p_tuning", type=bool, default=True)
-    parser.add_argument("--relation_pseudo_token", type=str, default='[PROMPT]')
-    parser.add_argument("--entity_pseudo_token", type=str, default='[PROMPT_E]')
+    parser.add_argument("--entity_pseudo_token", type=str, default='[PROMPT]')
+    parser.add_argument("--entity_split_token", type=str, default='[ENTITY_SPLIT]')
     
-    parser.add_argument("--template", type=str, default="(3, 3, 3, 3)")
-    parser.add_argument("--ner_template", type=str, default="(4, 4, 4)")
+    parser.add_argument("--template", type=str, default="(9)")
+    parser.add_argument("--decoder_template", type=str, default="(3)")
     
     # contractive learning
-    parser.add_argument("--contrasive", type=bool, default=True)
+    parser.add_argument("--contrasive", type=bool, default=False)
 
     # train/dev settting
     parser.add_argument("--bsz_per_device", default=3, type=int, 
@@ -734,10 +572,8 @@ def get_args():
     args = parser.parse_args()
 
     args.template = eval(args.template) if type(args.template) is not tuple else args.template
-    args.ner_template = eval(args.ner_template) if type(args.ner_template) is not tuple else args.ner_template
+    args.decoder_template=eval(args.decoder_template)
 
-    assert type(args.template) is tuple
-    assert type(args.ner_template) is tuple
     return args
 
 
