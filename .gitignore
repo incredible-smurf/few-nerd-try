@@ -2,4 +2,5 @@ data/few_ner/Few-NERD-main/
 checkpoint/*
 */__pycache__
 transformer/checkpoint
+transformers/checkpoint
 pretrained_model/*

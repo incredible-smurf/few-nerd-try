@@ -1,6 +1,6 @@
 import torch
-from transformer.models.bart.light_ner_prompt_bart import *
-from transformer.models.bart.configuration_bart import LightBartConfig
+from transformers.models.bart.light_ner_prompt_bart import *
+from transformers.models.bart.configuration_bart import LightBartConfig
 
 from transformers import BartTokenizer
 import torch

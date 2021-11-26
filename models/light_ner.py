@@ -2,16 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import numpy as np
-from transformer.models.bart.light_ner_prompt_bart import *
-from fastNLP.modules import Seq2SeqEncoder, Seq2SeqDecoder, State
-from fastNLP.models import Seq2SeqModel
+from transformers.models.bart.light_ner_prompt_bart import *
 
 
 
 
-class LightSeq2SeqModel(Seq2SeqModel):
-    def __init__(self, encoder: Seq2SeqEncoder, decoder: Seq2SeqDecoder):
-        super().__init__(encoder, decoder)
+class LightSeq2SeqModel(torch.nn.Module):
+    def __init__(self, encoder: torch.nn.Module, decoder: torch.nn.Module):
+        super().__init__()
+        self.encoder=encoder
+        self.decoder =decoder
 
     
     def forward(self, src_tokens, tgt_tokens, src_seq_len=None, tgt_seq_len=None):
@@ -44,40 +44,11 @@ class LightSeq2SeqModel(Seq2SeqModel):
         state = self.decoder.init_state(encoder_output, encoder_mask)
         return state
     
-    @classmethod
-    def build_model(cls, bart_model, tokenizer, label_ids, decoder_type=None,
-                    use_encoder_mlp=False):
-        model = BartModel.from_pretrained(bart_model)
-        num_tokens, _ = model.encoder.embed_tokens.weight.shape
-        model.resize_token_embeddings(len(tokenizer.unique_no_split_tokens)+num_tokens)
-        encoder = model.encoder
-        decoder = model.decoder
-
-        _tokenizer = BartTokenizer.from_pretrained(bart_model)
-        for token in tokenizer.unique_no_split_tokens:
-            if token[:2] == '<<':  # 特殊字符
-                index = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(token))
-                if len(index)>1:
-                    raise RuntimeError(f"{token} wrong split")
-                else:
-                    index = index[0]
-                assert index>=num_tokens, (index, num_tokens, token)
-                indexes = _tokenizer.convert_tokens_to_ids(_tokenizer.tokenize(token[2:-2]))
-                embed = model.encoder.embed_tokens.weight.data[indexes[0]]
-                for i in indexes[1:]:
-                    embed += model.decoder.embed_tokens.weight.data[i]
-                embed /= len(indexes)
-                model.decoder.embed_tokens.weight.data[index] = embed
-
-        encoder =LightEncoder(encoder)
-        decoder = Lightdecoder(decoder)
-
-        return cls(encoder=encoder, decoder=decoder)
-    
 
 
 
-class LightEncoder(Seq2SeqEncoder):
+
+class LightEncoder(torch.nn.Module):
     def __init__(self,encoder) -> None:
         super().__init__()
         self.encoder=encoder
@@ -142,10 +113,10 @@ class LightEncoder(Seq2SeqEncoder):
         return encoder_outputs, mask, hidden_states
 
 
-class Lightdecoder(Seq2SeqDecoder):
+class LightDecoder(torch.nn.Module):
     def __init__(self,decoder, pad_token_id,use_encoder_mlp=True) -> None:
-        self.decoder=decoder
         super().__init__()
+        self.decoder=decoder
         self.decoder = decoder
         causal_mask = torch.zeros(512, 512).fill_(float('-inf'))
         causal_mask = causal_mask.triu(diagonal=1)

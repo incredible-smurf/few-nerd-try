@@ -1,12 +1,15 @@
 import torch
-from transformer.models.bart.light_ner_prompt_bart import *
-from transformer.models.bart.configuration_bart import LightBartConfig
+from transformers.models.bart.light_ner_prompt_bart import *
+from transformers.models.bart.configuration_bart import LightBartConfig
+from framework.LightNerFrame import LightNerFrame
+from models.light_ner import LightSeq2SeqModel,LightEncoder,LightDecoder
+
 
 from data_process.few_ner_dataset_for_bart import FewShotNERDataset
-from fastNLP import TorchLoaderIter
 from transformers import BartTokenizer
 import torch
-import argparse
+import torch.utils.data as data
+import argparse 
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -50,24 +53,38 @@ def get_args():
 
     return args
 
-def collate_fn():
 
+args=get_args()
+args.pytorch_model_path='./pretrained_model/bart-large-facebook/model'
 tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
-dataset =FewShotNERDataset(
-        './data/few_ner/intra/dev.txt', tokenizer, 3, 1, 1, 122,args=get_args())
-data_loader = TorchLoaderIter(dataset,collate_fn)
 
-
-configs= LightBartConfig.from_pretrained('facebook/bart-large')
+#lignt ner model
+configs = LightBartConfig.from_pretrained('facebook/bart-large')
 configs.prompt_lenth = 8
-pytorch_model_path='./pretrained_model/bart-large-facebook/model'
-
-tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
 model = BartModel(configs)
+checkpoint = torch.load(args.pytorch_model_path)
+model.load_state_dict(checkpoint,strict=False)
 
-checkpoint = torch.load(pytorch_model_path)
+model = LightSeq2SeqModel(LightEncoder(model.encoder),LightDecoder(model.decoder,tokenizer.pad_token_id))
 
-model.load_state_dict(checkpoint,strict=True)
+
+train_dataset =FewShotNERDataset(
+        './data/few_ner/intra/train.txt', tokenizer, 3, 2, 2, 122,args=args)
+
+dataloader = data.DataLoader(train_dataset)
+
+
+Framework =LightNerFrame (model,tokenizer,args)
+
+
+
+
+
+
+
+
+
+
 inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
 prompt_len=8
 
