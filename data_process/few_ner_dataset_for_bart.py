@@ -182,7 +182,6 @@ class FewShotNERDataset(data.Dataset):
     """
     Fewshot NER Dataset
     """
-
     def __init__(self, filepath, tokenizer, N, K, Q, max_length, Ptuing=True, ignore_label_id=-1, encoder_name='bart',args=None):
         if not os.path.exists(filepath):
             print("[ERROR] Data file does not exist!")
@@ -297,7 +296,8 @@ class FewShotNERDataset(data.Dataset):
         assert 'bart' in self.encoder_name.lower()
         entity_list,entity_label_list=self._get_entity_list(raw_tokens,labels)
         return_dic={}
-        prompt = self._get_encoder_ptuning_template(self.P_template_len)
+        if self.Ptuing:
+            prompt = self._get_encoder_ptuning_template(self.P_template_len)
         ori_input_token_id= self.tokenizer.convert_tokens_to_ids(raw_tokens)
 
         if self.use_bart_augment:
@@ -312,12 +312,29 @@ class FewShotNERDataset(data.Dataset):
         else :
             return_encoder_sentence_id = [self.tokenizer.bos_token_id]+ ori_input_token_id + [self.tokenizer.eos_token_id]
 
-        decoder_input_sentence_id = self.__get_decoder_output_sentence_id(target_classes,entity_list,entity_label_list,raw_tokens)
+        #decoder_input_sentence_id = self.__get_decoder_output_sentence_id(target_classes,entity_list,entity_label_list,raw_tokens)
+        
+        target_shift = self.N + 2#+2 <eos> & <sos>
+
+        target_span =[]
+        decoder_input_sentence_id=[self.tokenizer.bos_token_id]
+        
+        for i in range(len(entity_list)):
+            target_span .append(entity_list[i])
+            target_span[i].append(entity_label_list[i])
+            decoder_input_sentence_id.append(entity_list[i][0]+target_shift)#start
+            decoder_input_sentence_id.append(entity_list[i][1]+target_shift)#end
+            decoder_input_sentence_id.append(entity_label_list[i]+2)#entity_type
+
+        decoder_input_sentence_id+=[1]#<sos>
         
 
+        return_dic['span']=target_span
         return_dic['origin_input_id'] = ori_input_token_id
         return_dic['encoder_input_id']= return_encoder_sentence_id
+        return_dic['encoder_input_length']= len(return_encoder_sentence_id)
         return_dic['decoder_input_id']= decoder_input_sentence_id
+        return_dic['decoder_input_length']=len(decoder_input_sentence_id)
         return return_dic
 
     def __insert_sample__(self, index, sample_classes):
@@ -368,7 +385,7 @@ class FewShotNERDataset(data.Dataset):
         tokens_list = []
         origin_labels_list = []
 
-        while len(tokens) > self.max_length - 3-self.template_max_len:
+        """ while len(tokens) > self.max_length - 3-self.template_max_len:
             tokens_list.append(
                 tokens[:self.max_length-3-self.template_max_len])
             tokens = tokens[self.max_length-3-self.template_max_len:]
@@ -377,7 +394,7 @@ class FewShotNERDataset(data.Dataset):
             labels = labels[self.max_length-3-self.template_max_len:]
         if tokens:
             tokens_list.append(tokens)
-            origin_labels_list.append(labels)
+            origin_labels_list.append(labels) """
 
         # (token_split_length,n_gram_total_length,target_classes_num,seq_length)
         word_list = []
@@ -458,7 +475,9 @@ class FewShotNERDataset(data.Dataset):
                 sample=self.__contact_template_for_bart(target_classes, tokens, labels)
                 for key in sample:
                     if(key not in return_dic):return_dic[key]=[]
-                    return_dic[key]+=sample[key]
+                    return_dic[key].append(sample[key])
+                return_dic['label2tag'] = [self.label2tag]
+                return_dic['tag2label'] = [self.tag2label]
             return return_dic
 
     def __getitem__(self, index):
@@ -585,8 +604,8 @@ if __name__=="__main__":
     dataset = FewShotNERDataset(
         './data/few_ner/intra/dev.txt', tokenizer, N, 1, 1, 122,args=get_args())
     loader = iter(torch.utils.data.DataLoader(dataset,batch_size=2,collate_fn=data_collator))
-    print(next(loader)[0])
     for i in range(10000):
-        t = dataset[i][0]
-        print(t)
+        t1 = dataset[i]
+        print(t1)
+        break
     #print(t['seg'].shape)

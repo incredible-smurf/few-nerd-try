@@ -12,9 +12,10 @@ pytorch_model_path='./pretrained_model/bart-large-facebook/model'
 tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
 model = BartModel(configs)
 
+
 checkpoint = torch.load(pytorch_model_path)
 
-model.load_state_dict(checkpoint,strict=True)
+model.load_state_dict(checkpoint,strict=False)
 inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
 prompt_len=8
 
