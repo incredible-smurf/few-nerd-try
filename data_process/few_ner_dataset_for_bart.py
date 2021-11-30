@@ -5,12 +5,14 @@ import torch
 import random
 import os
 import numpy as np
-from transformers import BertTokenizer,BartTokenizer
+from transformers import BertTokenizer, BartTokenizer
 from torch.nn.utils.rnn import pad_sequence
 import argparse
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
-#entity classification
+# entity classification
+
+
 def get_class_name(rawtag):
     # get (finegrained) class name
     if rawtag.startswith('B-') or rawtag.startswith('I-'):
@@ -182,7 +184,8 @@ class FewShotNERDataset(data.Dataset):
     """
     Fewshot NER Dataset
     """
-    def __init__(self, filepath, tokenizer, N, K, Q, max_length, Ptuing=True, ignore_label_id=-1, encoder_name='bart',args=None):
+
+    def __init__(self, filepath, tokenizer, N, K, Q, max_length, Ptuing=True, ignore_label_id=-1, encoder_name='bart', args=None):
         if not os.path.exists(filepath):
             print("[ERROR] Data file does not exist!")
             assert(0)
@@ -197,29 +200,30 @@ class FewShotNERDataset(data.Dataset):
             N, K, Q, self.samples, classes=self.classes)
         self.ignore_label_id = ignore_label_id
 
-        self.use_bart_augment=False
-
+        self.use_bart_augment = False
 
         self.encoder_name = encoder_name
         self.Ptuing = Ptuing
 
         if (self.Ptuing):
             P_template_format = args.template
-            self.tokenizer.add_special_tokens({'additional_special_tokens': [args.entity_pseudo_token,args.entity_split_token]})
+            self.tokenizer.add_special_tokens({'additional_special_tokens': [
+                                              args.entity_pseudo_token, args.entity_split_token]})
             self.P_template_len = P_template_format
             self.template_max_len = P_template_format
             self.decoder_template = args.decoder_template
-            self.entity_pseudo_token_id = self.tokenizer.get_vocab()[args.entity_pseudo_token]
-            self.entity_split_token_id= self.tokenizer.get_vocab()[args.entity_split_token]
-            self.entity_split_token=args.entity_split_token
-            self.entity_pseudo_token=args.entity_pseudo_token
+            self.entity_pseudo_token_id = self.tokenizer.get_vocab()[
+                args.entity_pseudo_token]
+            self.entity_split_token_id = self.tokenizer.get_vocab()[
+                args.entity_split_token]
+            self.entity_split_token = args.entity_split_token
+            self.entity_pseudo_token = args.entity_pseudo_token
             self.ner_template = args.template
         else:
             self.template_max_len = 15  # need edit
         assert self.template_max_len < max_length-2
 
         self.MASK = self.tokenizer.mask_token_id
-
 
         if self.encoder_name == 'bert':
             self.SEP = self.tokenizer.convert_tokens_to_ids(['[SEP]'])
@@ -228,113 +232,135 @@ class FewShotNERDataset(data.Dataset):
         else:
             self.SEP = self.tokenizer.convert_tokens_to_ids(['</s>'])
             self.CLS = self.tokenizer.convert_tokens_to_ids(['<s>'])
-            
 
-    def _get_encoder_ptuning_template(self,template_lenth):
+    def _get_encoder_ptuning_template(self, template_lenth):
         if self.Ptuing:
-            prompt_token=self.entity_pseudo_token
+            prompt_token = self.entity_pseudo_token
             prompt = [prompt_token] * template_lenth
-                    
+
             #raise NotImplementedError
-        
+
         return prompt
 
-    def _get_entity_list (self,tokens,labels):
+    def _get_entity_list(self, tokens, labels):
         entity_list = []
         entity_label_list = []
-        assert len(tokens)==len(labels)
-        entity_st_ptr=-1
-        entity_ed_ptr=-1
-        entity_label=-1
+        assert len(tokens) == len(labels)
+        entity_st_ptr = -1
+        entity_ed_ptr = -1
+        entity_label = -1
         for i in range(len(tokens)):
-            if(labels[i]!=0):
-                if(entity_st_ptr==-1):
-                    entity_st_ptr=i
-                    entity_ed_ptr=i
-                    entity_label=labels[i]
+            if(labels[i] != 0):
+                if(entity_st_ptr == -1):
+                    entity_st_ptr = i
+                    entity_ed_ptr = i
+                    entity_label = labels[i]
                 else:
-                    entity_ed_ptr+=1
+                    entity_ed_ptr += 1
             else:
-                if(entity_st_ptr!=-1):
-                    entity_list.append([entity_st_ptr,entity_ed_ptr])
+                if(entity_st_ptr != -1):
+                    entity_list.append([entity_st_ptr, entity_ed_ptr])
                     entity_label_list.append(entity_label)
-                    entity_st_ptr=-1
-                    entity_ed_ptr=-1
-                    entity_label=-1
-        if(entity_st_ptr!=-1):
-            entity_list.append([entity_st_ptr,entity_ed_ptr])
+                    entity_st_ptr = -1
+                    entity_ed_ptr = -1
+                    entity_label = -1
+        if(entity_st_ptr != -1):
+            entity_list.append([entity_st_ptr, entity_ed_ptr])
             entity_label_list.append(entity_label)
-        del entity_st_ptr,entity_ed_ptr,entity_label,i
+        del entity_st_ptr, entity_ed_ptr, entity_label, i
 
-        return entity_list,entity_label_list
+        return entity_list, entity_label_list
 
     # decoder sentence =[bos_id,entity_1,[prompt_token],entity_type,[entity_spilt_token],entity2,...,[eos_token]]
-    def __get_decoder_output_sentence_id(self,target_classes,entity_list,entity_label_list,raw_tokens):
-        decoder_input_sentence_id=[self.tokenizer.bos_token_id]
+    def __get_decoder_output_sentence_id(self, target_classes, entity_list, entity_label_list, raw_tokens):
+        decoder_input_sentence_id = [self.tokenizer.bos_token_id]
         for i in range(len(entity_list)):
-            for j in range(entity_list[i][0],entity_list[i][1]):
-                decoder_input_sentence_id+=self.tokenizer.convert_tokens_to_ids([raw_tokens[j]])
+            for j in range(entity_list[i][0], entity_list[i][1]):
+                decoder_input_sentence_id += self.tokenizer.convert_tokens_to_ids([
+                                                                                  raw_tokens[j]])
 
+            decoder_input_sentence_id += [
+                self.entity_pseudo_token_id]*self.decoder_template
 
-            decoder_input_sentence_id+=[self.entity_pseudo_token_id]*self.decoder_template
-            
-            tt= 'location-road/railway/highway/transit'
-            entity_type=target_classes[entity_label_list[i]-1].split('/')[0]
-            entity_type=entity_type.split('-')
-            
-            
-            decoder_input_sentence_id+=self.tokenizer.convert_tokens_to_ids(entity_type)
+            tt = 'location-road/railway/highway/transit'
+            entity_type = target_classes[entity_label_list[i]-1].split('/')[0]
+            entity_type = entity_type.split('-')
 
+            decoder_input_sentence_id += self.tokenizer.convert_tokens_to_ids(
+                entity_type)
 
-            if(i!=len(entity_list)-1):
-                decoder_input_sentence_id+=self.entity_split_token_id
-        decoder_input_sentence_id+=[self.tokenizer.eos_token_id]
+            if(i != len(entity_list)-1):
+                decoder_input_sentence_id += self.entity_split_token_id
+        decoder_input_sentence_id += [self.tokenizer.eos_token_id]
         return decoder_input_sentence_id
-                
+
+    def get_tokenizer_label_id(self, label2tag):
+
+        vocab = self.tokenizer.get_vocab()
+        label_id = []
+
+        for i in label2tag:
+            entity_type_name = label2tag[i]
+            # insert [entity_type] into vocab
+            special_token = '['+entity_type_name+']'
+            if special_token not in vocab:
+                self.tokenizer.add_tokens(special_token)
+                vocab = self.tokenizer.get_vocab()
+            label_id.append(vocab[special_token])
+
+        assert len(label2tag) == len(label_id)
+        return label_id
+
     def __contact_template_for_bart(self, target_classes, raw_tokens, labels):
-        assert len(raw_tokens)==len(labels)
+        assert len(raw_tokens) == len(labels)
         assert 'bart' in self.encoder_name.lower()
-        entity_list,entity_label_list=self._get_entity_list(raw_tokens,labels)
-        return_dic={}
+        entity_list, entity_label_list = self._get_entity_list(
+            raw_tokens, labels)
+        return_dic = {}
         if self.Ptuing:
             prompt = self._get_encoder_ptuning_template(self.P_template_len)
-        ori_input_token_id= self.tokenizer.convert_tokens_to_ids(raw_tokens)
+        ori_input_token_id = self.tokenizer.convert_tokens_to_ids(raw_tokens)
 
         if self.use_bart_augment:
             pass
 
-
-
         if self.Ptuing:
-            inserted_input_tokens = self.tokenizer.convert_tokens_to_ids(prompt+ raw_tokens)
-            return_encoder_sentence_id = [self.tokenizer.bos_token_id]+ inserted_input_tokens + [self.tokenizer.eos_token_id]
-        
-        else :
-            return_encoder_sentence_id = [self.tokenizer.bos_token_id]+ ori_input_token_id + [self.tokenizer.eos_token_id]
+            inserted_input_tokens = self.tokenizer.convert_tokens_to_ids(
+                prompt + raw_tokens)
+            return_encoder_sentence_id = [
+                self.tokenizer.bos_token_id] + inserted_input_tokens + [self.tokenizer.eos_token_id]
+
+        else:
+            return_encoder_sentence_id = [
+                self.tokenizer.bos_token_id] + ori_input_token_id + [self.tokenizer.eos_token_id]
 
         #decoder_input_sentence_id = self.__get_decoder_output_sentence_id(target_classes,entity_list,entity_label_list,raw_tokens)
-        
-        target_shift = self.N + 2#+2 <eos> & <sos>
 
-        target_span =[]
-        decoder_input_sentence_id=[self.tokenizer.bos_token_id]
-        
+        self.target_shift = self.N + 4  # +4 <eos> & <bos>& <pad> & O tag
+        if self.Ptuing:
+            self.target_shift += len(prompt)
+
+        target_span = []
+        decoder_input_sentence_id = [self.tokenizer.bos_token_id]
+
         for i in range(len(entity_list)):
             target_span .append(entity_list[i])
             target_span[i].append(entity_label_list[i])
-            decoder_input_sentence_id.append(entity_list[i][0]+target_shift)#start
-            decoder_input_sentence_id.append(entity_list[i][1]+target_shift)#end
-            decoder_input_sentence_id.append(entity_label_list[i]+2)#entity_type
+            decoder_input_sentence_id.append(
+                entity_list[i][0]+self.target_shift)  # start
+            decoder_input_sentence_id.append(
+                entity_list[i][1]+self.target_shift)  # end
+            decoder_input_sentence_id.append(
+                entity_label_list[i]+3)  # entity_type
 
-        decoder_input_sentence_id+=[1]#<sos>
-        
+        decoder_input_sentence_id += [self.tokenizer.eos_token_id]  # <eos>
 
-        return_dic['span']=target_span
+        return_dic['span'] = target_span
         return_dic['origin_input_id'] = ori_input_token_id
-        return_dic['encoder_input_id']= return_encoder_sentence_id
-        return_dic['encoder_input_length']= len(return_encoder_sentence_id)
-        return_dic['decoder_input_id']= decoder_input_sentence_id
-        return_dic['decoder_input_length']=len(decoder_input_sentence_id)
+        return_dic['encoder_input_id'] = return_encoder_sentence_id
+        return_dic['encoder_input_length'] = len(return_encoder_sentence_id)
+        return_dic['decoder_input_id'] = decoder_input_sentence_id
+        return_dic['decoder_input_length'] = len(decoder_input_sentence_id)
         return return_dic
 
     def __insert_sample__(self, index, sample_classes):
@@ -379,7 +405,6 @@ class FewShotNERDataset(data.Dataset):
                 labels.extend(word_labels)
         return tokens, labels
 
-
     def __getraw__(self, tokens, labels, target_classes):
         # get tokenized word list, attention mask
         tokens_list = []
@@ -411,12 +436,12 @@ class FewShotNERDataset(data.Dataset):
                 target_classes, tokens, origin_labels_list[i])
             # print(word_tensor_list,labels_list,'112',span_tensor_list)
             assert(len(span_tensor_list) == len(label_tensor_list))
-            raw_list+=(tokens)
-            word_list+=(word_tensor_list)
-            mask_list+=(mask_tensor_list)
-            seg_list+=(seg_tensor_list)
-            span_list+=(span_tensor_list)
-            label_list+=(label_tensor_list)
+            raw_list += (tokens)
+            word_list += (word_tensor_list)
+            mask_list += (mask_tensor_list)
+            seg_list += (seg_tensor_list)
+            span_list += (span_tensor_list)
+            label_list += (label_tensor_list)
 
         return word_list, mask_list, seg_list, label_list, span_list, raw_list
 
@@ -429,7 +454,7 @@ class FewShotNERDataset(data.Dataset):
         d['span'].append(span)
         d['raw_text'].append(raw_text)
 
-    def __populate__(self, idx_list, target_classes, savelabeldic=False):
+    def __populate__(self, idx_list, target_classes):
         '''
         populate samples into data dict
         set savelabeldic=True if you want to save label2tag dict
@@ -442,42 +467,55 @@ class FewShotNERDataset(data.Dataset):
         '''
         dataset = {'index': [], 'word': [], 'mask': [], 'raw_text': [],
                    'label': [], 'seg': [], 'span': []}
-        
-        #contact to matrix to acclerate train_speed
+
+        # contact to matrix to acclerate train_speed
         if "bert" in self.encoder_name:
-            word_matrix=[]
-            seg_matrix=[]
-            mask_matrix=[]
-            label_matrix=[]
+            word_matrix = []
+            seg_matrix = []
+            mask_matrix = []
+            label_matrix = []
 
             for idx in idx_list:
-                tokens, labels = self.__get_token_label_list__(self.samples[idx])
+                tokens, labels = self.__get_token_label_list__(
+                    self.samples[idx])
                 word, mask, seg, label, span, raw = self.__getraw__(
                     tokens, labels, target_classes)
-                word_matrix+=(word)
-                seg_matrix+=(seg)
-                mask_matrix+=(mask)
-                label_matrix+=label
-                self.__additem__(idx, dataset, word, mask, seg, label, span, raw)
+                word_matrix += (word)
+                seg_matrix += (seg)
+                mask_matrix += (mask)
+                label_matrix += label
+                self.__additem__(idx, dataset, word, mask,
+                                 seg, label, span, raw)
 
-
-            dataset['word_mat']=torch.tensor(word_matrix).long()
-            dataset['seg_mat']=torch.tensor(seg_matrix).long()
-            dataset['mask_mat']=torch.tensor(mask_matrix).long()
-            dataset['label_mat']=torch.tensor(label_matrix).long()
+            dataset['word_mat'] = torch.tensor(word_matrix).long()
+            dataset['seg_mat'] = torch.tensor(seg_matrix).long()
+            dataset['mask_mat'] = torch.tensor(mask_matrix).long()
+            dataset['label_mat'] = torch.tensor(label_matrix).long()
             dataset['label2tag'] = [self.label2tag]
             return dataset
 
         elif "bart" in self.encoder_name:
-            return_dic={}
+            return_dic = {}
             for idx in idx_list:
-                tokens, labels = self.__get_token_label_list__(self.samples[idx])
-                sample=self.__contact_template_for_bart(target_classes, tokens, labels)
+                tokens, labels = self.__get_token_label_list__(
+                    self.samples[idx])
+                sample = self.__contact_template_for_bart(
+                    target_classes, tokens, labels)
+
                 for key in sample:
-                    if(key not in return_dic):return_dic[key]=[]
+                    if(key not in return_dic):
+                        return_dic[key] = []
                     return_dic[key].append(sample[key])
-                return_dic['label2tag'] = [self.label2tag]
-                return_dic['tag2label'] = [self.tag2label]
+            
+            #pad
+            return_dic['encoder_input_id'] =batch_convert_ids_to_tensors (return_dic['encoder_input_id'],self.tokenizer.pad_token_id)
+            return_dic['decoder_input_id'] =batch_convert_ids_to_tensors (return_dic['decoder_input_id'],self.tokenizer.pad_token_id)
+            return_dic['encoder_input_length']=torch.tensor(return_dic['encoder_input_length'])
+            return_dic['decoder_input_length']=torch.tensor(return_dic['decoder_input_length'])
+            return_dic['label2tag'] = [self.label2tag]# don' t forget to +3 then
+            return_dic['tag2label'] = [self.tag2label]
+            return_dic['label_vocab_id'] = self.get_tokenizer_label_id(
+                    self.label2tag)
             return return_dic
 
     def __getitem__(self, index):
@@ -489,123 +527,124 @@ class FewShotNERDataset(data.Dataset):
         support_set = self.__populate__(support_idx, target_classes)
         query_set = self.__populate__(
             query_idx, target_classes)
+
         return support_set, query_set
 
     def __len__(self):
         return 1000000000
 
-def batch_convert_ids_to_tensors(batch_token_ids: List[List],pad_id=BartTokenizer.from_pretrained('facebook/bart-base').pad_token_id) -> torch.Tensor:
+
+def batch_convert_ids_to_tensors(batch_token_ids: List[List], pad_id=BartTokenizer.from_pretrained('facebook/bart-base').pad_token_id) -> torch.Tensor:
     bz = len(batch_token_ids)
-    batch_tensors = [torch.LongTensor(batch_token_ids[i]).squeeze(0) for i in range(bz)]
-    batch_tensors = pad_sequence(batch_tensors, True, padding_value=pad_id).long()
+    batch_tensors = [torch.LongTensor(
+        batch_token_ids[i]) for i in range(bz)]
+    batch_tensors = pad_sequence(
+        batch_tensors, True, padding_value=pad_id).long()
     return batch_tensors
 
 
+def bart_data_collator(data):
+    batch_support = {}
+    batch_query = {}
+    support_set, query_set = zip(*data)
+    assert (len(support_set) == len(query_set))
+    pad_id = BartTokenizer.from_pretrained('facebook/bart-base').pad_token_id
 
-def data_collator(data):
-    batch_support={'encoder_tensors':[],'decoder_tensors':[],'origin_decode_tensors':[],"lm_labels":[],"span_list":[],'label':[],'prompt_labels':[]}
-    batch_query={'encoder_tensors':[],'decoder_tensors':[],'origin_decode_tensors':[],"lm_labels":[],"span_list":[],'label':[],'prompt_labels':[]}
-    support_set,query_set = zip(*data)
-    assert (len(support_set)==len(query_set))
     for i in range(len(support_set)):
-        features=support_set[i]
+        one_support = support_set[i]
+        for key in one_support:
+            if key not in batch_support:
+                batch_support[key] = []
+        for key in one_support:
+            batch_support[key].append(one_support[key])
 
-    
-        assert len(features["encoder_tensor_list"])==len(features["decoder_tensor_list"])
-        assert len(features["encoder_tensor_list"])==len(features["lmlabel_list"])
-        
-
-        #pad
-        batch_support['encoder_tensors']+= features["encoder_tensor_list"]
-        batch_support['decoder_tensors']+= features["decoder_tensor_list"]
-        batch_support['origin_decode_tensors']+= features["origin_decode_tensor_list"]
-        batch_support['lm_labels']+=features["lmlabel_list"]
-
-        batch_support['span_list']+=torch.tensor([features['span_list']])
-        batch_support['label']+=torch.LongTensor([features["label_tensor_list"]])
-        batch_support['mask_loc']=torch.tensor([features['mask_loc']])
-        batch_support['prompt_labels'] = torch.LongTensor([features["e_label_list"]])
-        
+    del one_support
     for i in range(len(query_set)):
-        features=query_set[i]
-        batch_query['encoder_tensors']+= features["encoder_tensor_list"]
-        batch_query['decoder_tensors']+= features["decoder_tensor_list"]
-        batch_query['origin_decode_tensors']+= features["origin_decode_tensor_list"]
-        batch_query['lm_labels']+=features["lmlabel_list"]
+        one_query = query_set[i]
+        for key in one_query:
+            if key not in batch_support:
+                batch_support[key] = []
+        for key in one_query:
+            batch_support[key].append(one_query[key])
 
-        batch_query['span_list']+=torch.tensor([features['span_list']])
-        batch_query['label']+=torch.LongTensor([features["label_tensor_list"]])
-        
-        batch_query['prompt_labels'] = torch.LongTensor([features["e_label_list"]])
-        batch_query['mask_loc']=torch.tensor([features['mask_loc']])
+    batch_support['encoder_input_id'] = batch_convert_ids_to_tensors(
+        batch_support['encoder_input_id'], 
+        pad_id)#bart pad
+    batch_support['query_input_id'] = batch_convert_ids_to_tensors(
+        batch_support['query_input_id'], 
+        pad_id)#bart pad
+    batch_query['encoder_input_id'] = batch_convert_ids_to_tensors(
+        batch_support['encoder_input_id'], 
+        pad_id)#bart pad
+    batch_query['query_input_id'] = batch_convert_ids_to_tensors(
+        batch_support['query_input_id'], 
+        pad_id)#bart pad
 
-    padding_dic = ['encoder_tensors','decoder_tensors','origin_decode_tensors','lm_labels']
-    for i in padding_dic:
-        batch_support[i]=batch_convert_ids_to_tensors(batch_support[i])
-        batch_query[i]=batch_convert_ids_to_tensors(batch_query[i])
-    
-    lens=torch.tensor(batch_support['encoder_tensors']).shape[-1]
-    return batch_support,batch_query
-    
+    for i in batch_support:
+        try:
+            batch_support[i] =torch.tensor(batch_support[i])
+            batch_query[i] = torch.tensor(batch_query[i],pad_id=pad_id)
+        # do nothing
+        except Exception:
+            tmp = None
 
-
-
-
+    return batch_support, batch_query
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     # Required parameters
     # data
-    parser.add_argument("--model_name_or_path", default="facebook/bart-base", type=str, 
-                        help="Path to pre-trained model checkpoints or shortcut name selected in the list: " )
-    parser.add_argument("--output_dir", default='outputs/p_tuning/', type=str, 
+    parser.add_argument("--model_name_or_path", default="facebook/bart-base", type=str,
+                        help="Path to pre-trained model checkpoints or shortcut name selected in the list: ")
+    parser.add_argument("--output_dir", default='outputs/p_tuning/', type=str,
                         help="The output directory where the model predictions and checkpoints will be written.", )
-    parser.add_argument("--data_dir", default='dataset/wiki_NER/processed', type=str, 
+    parser.add_argument("--data_dir", default='dataset/wiki_NER/processed', type=str,
                         help="The input data dir.", )
     # prompt learning
     parser.add_argument("--p_tuning", type=bool, default=True)
     parser.add_argument("--entity_pseudo_token", type=str, default='[PROMPT]')
-    parser.add_argument("--entity_split_token", type=str, default='[ENTITY_SPLIT]')
-    
+    parser.add_argument("--entity_split_token", type=str,
+                        default='[ENTITY_SPLIT]')
+
     parser.add_argument("--template", type=str, default="(9)")
     parser.add_argument("--decoder_template", type=str, default="(3)")
-    
+
     # contractive learning
     parser.add_argument("--contrasive", type=bool, default=False)
 
     # train/dev settting
-    parser.add_argument("--bsz_per_device", default=3, type=int, 
+    parser.add_argument("--bsz_per_device", default=3, type=int,
                         help="train/dev batch size per device", )
-    parser.add_argument("--epoch", default=50, type=int, 
+    parser.add_argument("--epoch", default=50, type=int,
                         help="the number of training epochs.", )
-    parser.add_argument("--max_steps", default=1000000, type=int, 
+    parser.add_argument("--max_steps", default=1000000, type=int,
                         help="the number of training steps. \
                             If set to a positive number, \
                             the total number of training steps to perform. \
                             and it will override any value given in num_train_epochs", )
-    parser.add_argument("--lr", default=1e-5, type=float, 
+    parser.add_argument("--lr", default=1e-5, type=float,
                         help="learning rate", )
-    parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
-    
+    parser.add_argument("--local_rank", type=int, default=-1,
+                        help="For distributed training: local_rank")
+
     args = parser.parse_args()
 
-    args.template = eval(args.template) if type(args.template) is not tuple else args.template
-    args.decoder_template=eval(args.decoder_template)
+    args.template = eval(args.template) if type(
+        args.template) is not tuple else args.template
+    args.decoder_template = eval(args.decoder_template)
 
     return args
 
 
-
-if __name__=="__main__":
+if __name__ == "__main__":
     # n_gram dataset
-    N=5
+    N = 5
     tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
     dataset = FewShotNERDataset(
-        './data/few_ner/intra/dev.txt', tokenizer, N, 1, 1, 122,args=get_args())
-    loader = iter(torch.utils.data.DataLoader(dataset,batch_size=2,collate_fn=data_collator))
+        './data/few_ner/intra/dev.txt', tokenizer, N, 2, 2, 122, args=get_args())
+    loader = iter(torch.utils.data.DataLoader(
+        dataset, batch_size=2, collate_fn=bart_data_collator))
     for i in range(10000):
-        t1 = dataset[i]
-        print(t1)
-        break
-    #print(t['seg'].shape)
+        t1 = next(loader)
+    # print(t['seg'].shape)
