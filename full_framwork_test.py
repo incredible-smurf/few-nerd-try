@@ -98,9 +98,11 @@ model = LightSeq2SeqModel(model,args)
 
 
 Framework =LightNerFrame (model,tokenizer,args)
-Framework.train(dataloader,epoch=1,batch_size_each_epoch=1)
+#Framework.train(dataloader,epoch=1,batch_size_each_epoch=1)
 print("train finished")
-Framework.predict(torch.tensor([[1,412,2213]]))
+
+tmp=next(iter(dataloader))[0]
+Framework.predict(tmp['encoder_input_id'],label_id= tmp['label_vocab_id'],src_seq_len=tmp['encoder_input_length'])
 
 
 

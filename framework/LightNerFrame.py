@@ -88,12 +88,19 @@ class LightNerFrame:
 
     :param torch.LongTensor src_tokens: bsz x max_len
     :param torch.LongTensor src_seq_len: bsz
+    :param torch.LongTensor label_id: args.N
     :return:
     """
-    def predict(self,src_tokens, src_seq_len=None):
+    def predict(self,src_tokens, src_seq_len=None,label_id=None):
+        if src_seq_len.size(0)==1:
+            src_seq_len=src_seq_len.squeeze(0)
+        if src_tokens.size(0)==1:
+            src_tokens=src_tokens.squeeze(0)
+
         generate_model = SequenceGeneratorModel(self.model,
         self.tokenizer.bos_token_id,
         self.tokenizer.eos_token_id,)
-        return generate_model.predict(src_tokens,src_seq_len)
+        self.model.eval()
+        return generate_model.predict(src_tokens,src_seq_len=src_seq_len,label_id=label_id)
                 
 

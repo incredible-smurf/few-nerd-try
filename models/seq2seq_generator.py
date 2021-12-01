@@ -59,7 +59,7 @@ class SequenceGeneratorModel(nn.Module):
         """
         return self.seq2seq_model(src_tokens, tgt_tokens, src_seq_len, tgt_seq_len, first)
 
-    def predict(self, src_tokens, src_seq_len=None, first=None):
+    def predict(self, src_tokens,label_id, src_seq_len=None, first=None):
         """
         给定source的内容，输出generate的内容
 
@@ -67,7 +67,15 @@ class SequenceGeneratorModel(nn.Module):
         :param torch.LongTensor src_seq_len: bsz
         :return:
         """
+        assert label_id!=None
         state = self.seq2seq_model.prepare_state(src_tokens, src_seq_len, first)
+        state['label_id'] = [torch.tensor(i) for i in range(3)]
+        state['label_id'] += label_id
+        # swtich whole to torch.Longtensor
+        state['label_id'] = torch.LongTensor(
+            [int(state['label_id'][i]) for i in range(len(state['label_id']))])
+        state['src_tokens'] = src_tokens
+
         result = self.generator.generate(state)
         return {'pred': result}
 
@@ -199,13 +207,13 @@ def _no_beam_search_generate(decoder: Seq2SeqDecoder, state, tokens=None, max_le
     if tokens is None:
         if bos_token_id is None:
             raise RuntimeError("You have to specify either `tokens` or `bos_token_id`.")
-        batch_size = state.num_samples
+        batch_size = state['num_samples']
         if batch_size is None:
             raise RuntimeError("Cannot infer the number of samples from `state`.")
         tokens = torch.full([batch_size, 1], fill_value=bos_token_id, dtype=torch.long).to(device)
     batch_size = tokens.size(0)
-    if state.num_samples:
-        assert state.num_samples == batch_size, "The number of samples in `tokens` and `state` should match."
+    if state['num_samples']:
+        assert state['num_samples'] == batch_size, "The number of samples in `tokens` and `state` should match."
 
     if eos_token_id is None:
         _eos_token_id = -1
@@ -228,15 +236,15 @@ def _no_beam_search_generate(decoder: Seq2SeqDecoder, state, tokens=None, max_le
 
     if max_len_a!=0:
         # (bsz x num_beams, )
-        if state.encoder_mask is not None:
-            max_lengths = (state.encoder_mask.sum(dim=1).float()*max_len_a).long() + max_length
+        if state['encoder_mask'] is not None:
+            max_lengths = (state['encoder_mask'].sum(dim=1).float()*max_len_a).long() + max_length
         else:
             max_lengths = tokens.new_full((tokens.size(0), ), fill_value=max_length, dtype=torch.long)
         real_max_length = max_lengths.max().item()
     else:
         real_max_length = max_length
-        if state.encoder_mask is not None:
-            max_lengths = state.encoder_mask.new_ones(state.encoder_mask.size(0)).long()*max_length
+        if state['encoder_mask'] is not None:
+            max_lengths = state['encoder_mask'].new_ones(state['encoder_mask'].size(0)).long()*max_length
         else:
             max_lengths = tokens.new_full((tokens.size(0),), fill_value=max_length, dtype=torch.long)
 
@@ -295,13 +303,13 @@ def _beam_search_generate(decoder: Seq2SeqDecoder, tokens=None, state=None, max_
     if tokens is None:
         if bos_token_id is None:
             raise RuntimeError("You have to specify either `tokens` or `bos_token_id`.")
-        batch_size = state.num_samples
+        batch_size = state['num_samples']
         if batch_size is None:
             raise RuntimeError("Cannot infer the number of samples from `state`.")
         tokens = torch.full([batch_size, 1], fill_value=bos_token_id, dtype=torch.long).to(device)
     batch_size = tokens.size(0)
-    if state.num_samples:
-        assert state.num_samples == batch_size, "The number of samples in `tokens` and `state` should match."
+    if state['num_samples']:
+        assert state['num_samples'] == batch_size, "The number of samples in `tokens` and `state` should match."
 
     if eos_token_id is None:
         _eos_token_id = -1

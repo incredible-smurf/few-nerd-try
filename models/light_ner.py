@@ -16,7 +16,6 @@ class LightSeq2SeqModel(torch.nn.Module):
 
     def forward(self, src_tokens, tgt_tokens, src_seq_len=None, tgt_seq_len=None, label_id=None):
         """
-
         :param torch.LongTensor src_tokens: source的token
         :param torch.LongTensor tgt_tokens: target的token
         :param torch.LongTensor src_seq_len: src的长度
@@ -53,6 +52,7 @@ class LightSeq2SeqModel(torch.nn.Module):
         encoder_output, encoder_mask, encoder_hidden_state = self.encoder(
             src_tokens, src_seq_len)
         state = self.decoder.init_state(encoder_output, encoder_mask)
+        state['num_samples'] = encoder_output.size(0)
         return state
 
 
@@ -60,8 +60,6 @@ class LightEncoder(torch.nn.Module):
     def __init__(self, encoder) -> None:
         super().__init__()
         self.encoder = encoder
-
-    
 
     """
         :param torch.LongTensor tokens: bsz x max_len, encoder的输入
@@ -100,7 +98,8 @@ class LightDecoder(torch.nn.Module):
 
     def init_state(self, encoder_output, encoder_mask):
         state = {'encoder_output': encoder_output,
-                 'encoder_mask': encoder_mask}
+                 'encoder_mask': encoder_mask,
+                 'past_key_values':None}
         return state
 
     def forward(self, tokens, state):
@@ -124,7 +123,7 @@ class LightDecoder(torch.nn.Module):
 
         if(self.training):
             tokens = tokens[:, :-1]
-            decoder_pad_mask = tokens.eq(self.pad_token_id)
+            decoder_pad_mask = ~tokens.eq(self.pad_token_id)
             dict = self.decoder(input_ids=tokens,
                                 encoder_hidden_states=encoder_outputs,
                                 encoder_attention_mask=encoder_pad_mask,
@@ -132,11 +131,10 @@ class LightDecoder(torch.nn.Module):
                                 return_dict=True)
         else:
             past_key_values = state['past_key_values']
-            decoder_pad_mask = tokens.eq(self.pad_token_id)
             dict = self.decoder(input_ids=tokens,
                                 encoder_hidden_states=encoder_outputs,
                                 encoder_attention_mask=encoder_pad_mask,
-                                attention_mask=decoder_pad_mask,
+                                attention_mask=None,
                                 past_key_values=past_key_values,
                                 use_cache=True,
                                 return_dict=True)
@@ -144,7 +142,7 @@ class LightDecoder(torch.nn.Module):
         hidden_state = dict.last_hidden_state
         hidden_state = self.dropout_layer(hidden_state)#[bz,token_len,hidden]
         if not self.training:
-            state.past_key_values = dict.past_key_values
+            state['past_key_values'] = dict.past_key_values
         
         logits = hidden_state.new_full((hidden_state.size(0), hidden_state.size(1), self.src_start_index+src_tokens.size(-1)),
                                        fill_value=-1e24)
@@ -177,6 +175,8 @@ class LightDecoder(torch.nn.Module):
 
         return logits
 
+    def decode(self, tokens, state):
+        return self(tokens, state)[:, -1]
 
 
 
