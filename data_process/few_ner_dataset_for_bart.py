@@ -204,6 +204,7 @@ class FewShotNERDataset(data.Dataset):
 
         self.encoder_name = encoder_name
         self.Ptuing = Ptuing
+        self.args=args
 
         if (self.Ptuing):
             P_template_format = args.template
@@ -312,6 +313,8 @@ class FewShotNERDataset(data.Dataset):
         return label_id
 
     def __contact_template_for_bart(self, target_classes, raw_tokens, labels):
+        raw_tokens = raw_tokens[:self.args.max_length-3]
+        labels =labels [:self.args.max_length-3]
         assert len(raw_tokens) == len(labels)
         assert 'bart' in self.encoder_name.lower()
         entity_list, entity_label_list = self._get_entity_list(

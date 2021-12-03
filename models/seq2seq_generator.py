@@ -2,10 +2,9 @@ r"""undocumented"""
 
 import torch
 from torch import nn
-from fastNLP.models.seq2seq_model import Seq2SeqModel
-from fastNLP.modules.decoder.seq2seq_decoder import Seq2SeqDecoder
+#from fastNLP.models.seq2seq_model import Seq2SeqModel
+#from fastNLP.modules.decoder.seq2seq_decoder import Seq2SeqDecoder
 import torch.nn.functional as F
-from fastNLP.core.utils import _get_model_device
 from functools import partial
 
 
@@ -15,7 +14,7 @@ class SequenceGeneratorModel(nn.Module):
 
     """
 
-    def __init__(self, seq2seq_model: Seq2SeqModel, bos_token_id, eos_token_id=None, max_length=30, max_len_a=0.0,
+    def __init__(self, seq2seq_model, bos_token_id, eos_token_id=None, max_length=30, max_len_a=0.0,
                  num_beams=1, do_sample=True,
                  repetition_penalty=1, length_penalty=1.0, pad_token_id=0,
                  restricter=None):
@@ -94,7 +93,7 @@ class SequenceGenerator:
     给定一个Seq2SeqDecoder，decode出句子
 
     """
-    def __init__(self, decoder: Seq2SeqDecoder, max_length=20, max_len_a=0.0, num_beams=1,
+    def __init__(self, decoder, max_length=20, max_len_a=0.0, num_beams=1,
                  do_sample=False, bos_token_id=None, eos_token_id=None,
                  repetition_penalty=1, length_penalty=1.0, pad_token_id=0, restricter=None):
         """
@@ -199,7 +198,7 @@ def greedy_generate(decoder, tokens=None, state=None, max_length=20, max_len_a=0
     return token_ids
 
 
-def _no_beam_search_generate(decoder: Seq2SeqDecoder, state, tokens=None, max_length=20, max_len_a=0.0, bos_token_id=None,
+def _no_beam_search_generate(decoder, state, tokens=None, max_length=20, max_len_a=0.0, bos_token_id=None,
                              eos_token_id=None,
                              repetition_penalty=1.0, length_penalty=1.0, pad_token_id=0,
                              restricter=None):
@@ -293,7 +292,7 @@ def _no_beam_search_generate(decoder: Seq2SeqDecoder, state, tokens=None, max_le
     return token_ids
 
 
-def _beam_search_generate(decoder: Seq2SeqDecoder, tokens=None, state=None, max_length=20, max_len_a=0.0, num_beams=4,
+def _beam_search_generate(decoder, tokens=None, state=None, max_length=20, max_len_a=0.0, num_beams=4,
                           bos_token_id=None, eos_token_id=None, do_sample=True,
                           repetition_penalty=1.0, length_penalty=None, pad_token_id=0,
                           restricter=None) -> torch.LongTensor:
@@ -533,3 +532,18 @@ class BeamHypotheses(object):
             return self.worst_score >= best_sum_logprobs / self.max_length ** self.length_penalty
 
 
+def _get_model_device(model):
+    r"""
+    传入一个nn.Module的模型，获取它所在的device
+
+    :param model: nn.Module
+    :return: torch.device,None 如果返回值为None，说明这个模型没有任何参数。
+    """
+    # TODO 这个函数存在一定的风险，因为同一个模型可能存在某些parameter不在显卡中，比如BertEmbedding. 或者跨显卡
+    assert isinstance(model, nn.Module)
+
+    parameters = list(model.parameters())
+    if len(parameters) == 0:
+        return None
+    else:
+        return parameters[0].device

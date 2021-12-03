@@ -13,6 +13,7 @@ class LightSeq2SeqModel(torch.nn.Module):
         Bartmodel.resize_token_embeddings(200+num_tokens)
         self.encoder = LightEncoder(Bartmodel.encoder)
         self.decoder = LightDecoder(Bartmodel.decoder, args.pad_id, args.N+4)
+        self.dummy_param = nn.Parameter(torch.empty(0))
 
     def forward(self, src_tokens, tgt_tokens, src_seq_len=None, tgt_seq_len=None, label_id=None):
         """
@@ -29,7 +30,7 @@ class LightSeq2SeqModel(torch.nn.Module):
         state['label_id'] += label_id
         # swtich whole to torch.Longtensor
         state['label_id'] = torch.LongTensor(
-            [int(state['label_id'][i]) for i in range(len(state['label_id']))])
+            [int(state['label_id'][i]) for i in range(len(state['label_id']))]).to(self.dummy_param.device)
         state['src_tokens'] = src_tokens
 
         decoder_output = self.decoder(tgt_tokens, state)
