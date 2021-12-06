@@ -148,7 +148,7 @@ class LightDecoder(torch.nn.Module):
         logits = hidden_state.new_full((hidden_state.size(0), hidden_state.size(1), self.src_start_index+src_tokens.size(-1)),
                                        fill_value=-1e24)
         
-        eos_scores = F.linear(hidden_state, self.dropout_layer(self.decoder.embed_tokens.weight[:3]))  # bsz x max_len x 1
+        eos_scores = F.linear(hidden_state, self.dropout_layer(self.decoder.embed_tokens.weight[:3]))  # bsz x max_len x 3   #eos bos pad
         tag_scores = F.linear(hidden_state, self.dropout_layer(self.decoder.embed_tokens.weight[state['label_id'][4:]]))  # bsz x max_len x num_class
         src_outputs = state['encoder_output']
 
@@ -167,7 +167,7 @@ class LightDecoder(torch.nn.Module):
         if not self.avg_feature:
             gen_scores = torch.einsum('blh,bnh->bln', hidden_state, input_embed)  # bsz x max_len x max_word_len
             word_scores = (gen_scores + word_scores)/2
-        mask = mask.__or__(src_tokens.eq(2).cumsum(dim=1).ge(1).unsqueeze(1))
+        mask = mask.__or__(src_tokens.eq(2).cumsum(dim=1).ge(1).unsqueeze(1))# 2 represent eos_id
         word_scores = word_scores.masked_fill(mask, -1e32)
 
         logits[:, :, :3] = eos_scores
@@ -177,7 +177,8 @@ class LightDecoder(torch.nn.Module):
         return logits
 
     def decode(self, tokens, state):
-        return self(tokens, state)[:, -1]
+        return_tensor = self(tokens, state)[:, -1] #get last word logits
+        return return_tensor
 
 
 

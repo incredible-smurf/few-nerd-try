@@ -1,5 +1,5 @@
 import torch
-from transformers.models.bart.light_ner_prompt_bart import *
+from transformers.models.bart.modeling_bart import *
 from transformers.models.bart.configuration_bart import LightBartConfig
 from framework.LightNerFrame import LightNerFrame
 from models.light_ner import LightSeq2SeqModel,LightEncoder,LightDecoder
@@ -46,7 +46,7 @@ def get_args():
     
     parser.add_argument("--template", type=str, default="(9)")
     parser.add_argument("--decoder_template", type=str, default="(3)")
-    parser.add_argument("--max_length", default=180, type=int, 
+    parser.add_argument("--max_length", default=200, type=int, 
                         help="the max length of tokens.", )
     # contractive learning
     #parser.add_argument("--contrasive", type=bool, default=False)
@@ -56,7 +56,7 @@ def get_args():
                         help="train/dev batch size per device", ) """
     parser.add_argument("--epoch", default=100, type=int, 
                         help="the number of training epochs.", )
-    parser.add_argument("--batch_size_each_epoch", default=1000, type=int, 
+    parser.add_argument("--batch_size_each_epoch", default=500, type=int, 
                         help="the batch of few shot set per epoch.", )
     parser.add_argument("--max_steps", default=1000000, type=int, 
                         help="the number of training steps. \
@@ -72,7 +72,7 @@ def get_args():
                         help="learning rate", )
     parser.add_argument("--prompt_lr", default=1e-5, type=float, 
                         help="learning rate", )
-    parser.add_argument("--device", default='cpu', type=str, 
+    parser.add_argument("--device", default='cuda:0', type=str, 
                         help="training device", )
     #parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--num_workers", default=0, type=int, 
@@ -91,6 +91,7 @@ def get_args():
 
 
 args=get_args()
+args.normal_bart=True
 args.pytorch_model_path='./pretrained_model/bart-large-facebook/model'
 args.prompt_len=8
 tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
@@ -114,9 +115,6 @@ else:
 
 
 
-#lignt ner model
-configs = LightBartConfig.from_pretrained('facebook/bart-large')
-configs.prompt_lenth = args.prompt_len
 
 #----data
 train_dataset =FewShotNERDataset(
@@ -126,9 +124,8 @@ eval_dataset =FewShotNERDataset(
         './data/few_ner/intra/dev.txt', tokenizer, args.N, args.K, args.Q, args.max_length,args=args)
 eval_dataloader=data.DataLoader(eval_dataset,num_workers=args.num_workers)
 
-model = BartModel(configs)
-checkpoint = torch.load(args.pytorch_model_path)
-model.load_state_dict(checkpoint,strict=False)
+model = BartModel.from_pretrained('facebook/bart-large')
+
 
 model = LightSeq2SeqModel(model,args)
 model = SequenceGeneratorModel(model,tokenizer.bos_token_id,eos_token_id=tokenizer.eos_token_id)

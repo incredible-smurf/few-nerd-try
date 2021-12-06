@@ -1,3 +1,4 @@
+from pickle import NONE
 import torch
 import numpy as np
 from torch import optim
@@ -31,7 +32,7 @@ class LightNerFrame:
         parameters.append(params)
         return parameters
 
-    def evaluate(self,iters,check_times=1):
+    def evaluate(self,iters=None,check_times=10):
         
         parameters = self.__get_model_optim_paras()
         tmp_model_state=self.model.state_dict().copy()
@@ -83,7 +84,8 @@ class LightNerFrame:
                                     query['label_vocab_id'],
                                     src_seq_len=query['encoder_input_length']
                                     )
-            
+                #print("===========")
+                #print(pred['pred'],query['decoder_input_id'])
                 result=self.metrics.evaluate(query['span'],pred['pred'],query['decoder_input_id'])
                 fn+=result[0]
                 tp+=result[1]
@@ -95,12 +97,10 @@ class LightNerFrame:
         loss_item/=check_times
         for name, param in tmp_model_state.items():
             self.model.state_dict()[name]=param
-        if self.writer!=None:
-            self.writer.add_scalars('Eval/loss',loss_item,iters)
-            self.writer.add_scalars('Eval/fn',fn,iters)
-            self.writer.add_scalars('Eval/fp',fp,iters)
-            self.writer.add_scalars('Eval/tp',tp,iters)
-            #
+        if iters!=None:
+            assert isinstance(iters,int)
+        if self.writer!=None and iters !=None:
+            self.writer.add_scalars('Eval',{'loss_item':loss_item,'fn':fn,'fp':fp,'tp':tp},iters)
 
         return fn,tp,fp,loss_item
 
@@ -166,21 +166,20 @@ class LightNerFrame:
                     fn+=result[0]
                     tp+=result[1]
                     fp+=result[2]
+                
             fn/=batch_size_each_epoch
             tp/=batch_size_each_epoch
             fp/=batch_size_each_epoch
             loss_item/=batch_size_each_epoch
-
+            tqdm.write("fn {}, loss {} ".format(fn, loss_item))
+            tqdm.write("pred format now {}".format(pred['pred']))
             if self.eval_dataloader != None:
                 if train_iter % self.args.eval_per_train_epoch == 0:
-                    self.evaluate(iters=epoch)
+                    self.evaluate(iters=train_iter)
                     self.model.train()
 
             if self.writer!=None:
-                self.writer.add_scalars('Train/loss',loss_item,epoch)
-                self.writer.add_scalars('Train/fn',fn,epoch)
-                self.writer.add_scalars('Train/fp',fp,epoch)
-                self.writer.add_scalars('Train/tp',tp,epoch)
+                self.writer.add_scalars('Train',{'loss_item':loss_item,'fn':fn,'fp':fp,'tp':tp},train_iter)
 
 
     """

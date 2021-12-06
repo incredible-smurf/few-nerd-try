@@ -28,6 +28,7 @@ class Seq2SeqSpanMetric:
         self.total = 0
         self.target_type = target_type  # 如果是span的话，必须是偶数的span，否则是非法的
 
+    #target span = [原文中的位置+1 (bos_token_id)]
     def evaluate(self, target_span, pred, tgt_tokens):
         self.total += pred.size(0)
         pred_eos_index = pred.flip(dims=[1]).eq(self.eos_token_id).cumsum(dim=1).long()
@@ -102,9 +103,9 @@ def _compute_tp_fn_fp(ps, ts):
             p_num = 0
         else:
             p_num = ps[key]
-        tp += min(p_num, t_num)
-        fp += max(p_num - t_num, 0)
-        fn += max(t_num - p_num, 0)
+        tp += min(p_num, t_num) # min(right,wrong)
+        fp += max(p_num - t_num, 0)# len(wrong)- len(right)
+        fn += max(t_num - p_num, 0)  #len(right) - len(wrong)
         if key in ps:
             ps.pop(key)
     fp += sum(ps.values())

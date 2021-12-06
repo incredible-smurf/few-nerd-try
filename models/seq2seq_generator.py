@@ -72,9 +72,8 @@ class SequenceGeneratorModel(nn.Module):
         state['label_id'] += label_id
         # swtich whole to torch.Longtensor
         state['label_id'] = torch.LongTensor(
-            [int(state['label_id'][i]) for i in range(len(state['label_id']))])
+            [int(state['label_id'][i]) for i in range(len(state['label_id']))]).to(self.seq2seq_model.dummy_param.device)
         state['src_tokens'] = src_tokens
-
         result = self.generator.generate(state)
         return {'pred': result}
 
@@ -215,7 +214,7 @@ def _no_beam_search_generate(decoder, state, tokens=None, max_length=20, max_len
         assert state['num_samples'] == batch_size, "The number of samples in `tokens` and `state` should match."
 
     if eos_token_id is None:
-        _eos_token_id = -1
+        _eos_token_id = 1
     else:
         _eos_token_id = eos_token_id
 

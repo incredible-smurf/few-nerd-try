@@ -185,7 +185,7 @@ class FewShotNERDataset(data.Dataset):
     Fewshot NER Dataset
     """
 
-    def __init__(self, filepath, tokenizer, N, K, Q, max_length, Ptuing=True, ignore_label_id=-1, encoder_name='bart', args=None):
+    def __init__(self, filepath, tokenizer, N, K, Q, max_length, ignore_label_id=-1, encoder_name='bart', args=None):
         if not os.path.exists(filepath):
             print("[ERROR] Data file does not exist!")
             assert(0)
@@ -203,7 +203,7 @@ class FewShotNERDataset(data.Dataset):
         self.use_bart_augment = False
 
         self.encoder_name = encoder_name
-        self.Ptuing = Ptuing
+        self.Ptuing = args.p_tuning
         self.args=args
 
         if (self.Ptuing):
@@ -347,6 +347,11 @@ class FewShotNERDataset(data.Dataset):
         decoder_input_sentence_id = [self.tokenizer.bos_token_id]
 
         for i in range(len(entity_list)):
+            assert len(entity_list[i])==2
+
+            entity_list[i][0]+=1 # bos 
+            entity_list[i][1]+=1
+
             target_span .append(entity_list[i])
             target_span[i].append(entity_label_list[i])
             decoder_input_sentence_id.append(
@@ -364,6 +369,8 @@ class FewShotNERDataset(data.Dataset):
         return_dic['encoder_input_length'] = len(return_encoder_sentence_id)
         return_dic['decoder_input_id'] = decoder_input_sentence_id
         return_dic['decoder_input_length'] = len(decoder_input_sentence_id)
+        return_dic['raw_tokens']=raw_tokens
+        return_dic['raw_labels']=labels
         return return_dic
 
     def __insert_sample__(self, index, sample_classes):
