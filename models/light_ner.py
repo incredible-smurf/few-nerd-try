@@ -9,10 +9,11 @@ from data_process.data_utils import seq_len_to_mask
 class LightSeq2SeqModel(torch.nn.Module):
     def __init__(self, Bartmodel, args):
         super().__init__()
+        self.args=args
         num_tokens, _ = Bartmodel.encoder.embed_tokens.weight.shape
         Bartmodel.resize_token_embeddings(200+num_tokens)
         self.encoder = LightEncoder(Bartmodel.encoder)
-        self.decoder = LightDecoder(Bartmodel.decoder, args.pad_id, args.N+4)
+        self.decoder = LightDecoder(Bartmodel.decoder, args.pad_id, args.N+4,tag_rate=args.tag_rate)
         self.dummy_param = nn.Parameter(torch.empty(0))
 
     def forward(self, src_tokens, tgt_tokens, src_seq_len=None, tgt_seq_len=None, label_id=None):
@@ -79,9 +80,8 @@ class LightEncoder(torch.nn.Module):
 
 
 class LightDecoder(torch.nn.Module):
-    def __init__(self, decoder, pad_token_id, src_start_id, use_encoder_mlp=True,avg_feature=True) -> None:
+    def __init__(self, decoder, pad_token_id, src_start_id, use_encoder_mlp=True,avg_feature=True,tag_rate=None) -> None:
         super().__init__()
-        self.decoder = decoder
         self.decoder = decoder
         causal_mask = torch.zeros(512, 512).fill_(float('-inf'))
         causal_mask = causal_mask.triu(diagonal=1)
@@ -96,6 +96,9 @@ class LightDecoder(torch.nn.Module):
         self.dropout_layer = nn.Dropout(0.3)
         self.src_start_index = src_start_id
         self.avg_feature = avg_feature
+        if tag_rate==None :
+            self.tag_rate=1
+        else: self.tag_rate = tag_rate
 
     def init_state(self, encoder_output, encoder_mask):
         state = {'encoder_output': encoder_output,
@@ -148,8 +151,8 @@ class LightDecoder(torch.nn.Module):
         logits = hidden_state.new_full((hidden_state.size(0), hidden_state.size(1), self.src_start_index+src_tokens.size(-1)),
                                        fill_value=-1e24)
         
-        eos_scores = F.linear(hidden_state, self.dropout_layer(self.decoder.embed_tokens.weight[:3]))  # bsz x max_len x 3   #eos bos pad
-        tag_scores = F.linear(hidden_state, self.dropout_layer(self.decoder.embed_tokens.weight[state['label_id'][4:]]))  # bsz x max_len x num_class
+        eos_scores = F.linear(hidden_state, self.dropout_layer(self.decoder.embed_tokens.weight[2:3]))  # bsz x max_len x 3   #eos bos pad
+        tag_scores = self.tag_rate*F.linear(hidden_state, self.dropout_layer(self.decoder.embed_tokens.weight[state['label_id'][4:]]))  # bsz x max_len x num_class
         src_outputs = state['encoder_output']
 
         if hasattr(self, 'encoder_mlp'):
@@ -170,15 +173,15 @@ class LightDecoder(torch.nn.Module):
         mask = mask.__or__(src_tokens.eq(2).cumsum(dim=1).ge(1).unsqueeze(1))# 2 represent eos_id
         word_scores = word_scores.masked_fill(mask, -1e32)
 
-        logits[:, :, :3] = eos_scores
+        logits[:, :, 2:3] = eos_scores
         logits[:, :, 4:self.src_start_index] = tag_scores
         logits[:, :, self.src_start_index:] = word_scores
 
         return logits
 
     def decode(self, tokens, state):
-        return_tensor = self(tokens, state)[:, -1] #get last word logits
-        return return_tensor
+        return_tensor = self(tokens, state) #get last word logits
+        return return_tensor[:, -1]
 
 
 

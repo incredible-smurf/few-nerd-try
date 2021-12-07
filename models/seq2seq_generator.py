@@ -94,7 +94,7 @@ class SequenceGenerator:
     """
     def __init__(self, decoder, max_length=20, max_len_a=0.0, num_beams=1,
                  do_sample=False, bos_token_id=None, eos_token_id=None,
-                 repetition_penalty=1, length_penalty=1.0, pad_token_id=0, restricter=None):
+                 repetition_penalty=1, length_penalty=1.0, pad_token_id=1, restricter=None):
         """
 
         :param Seq2SeqDecoder decoder: Decoder对象
@@ -164,7 +164,7 @@ class SequenceGenerator:
 
 @torch.no_grad()
 def greedy_generate(decoder, tokens=None, state=None, max_length=20, max_len_a=0.0, num_beams=1,
-                    bos_token_id=None, eos_token_id=None, pad_token_id=0,
+                    bos_token_id=None, eos_token_id=None, pad_token_id=1,
                     repetition_penalty=1, length_penalty=1.0, restricter=None):
     """
     贪婪地搜索句子
@@ -199,7 +199,7 @@ def greedy_generate(decoder, tokens=None, state=None, max_length=20, max_len_a=0
 
 def _no_beam_search_generate(decoder, state, tokens=None, max_length=20, max_len_a=0.0, bos_token_id=None,
                              eos_token_id=None,
-                             repetition_penalty=1.0, length_penalty=1.0, pad_token_id=0,
+                             repetition_penalty=1.0, length_penalty=1.0, pad_token_id=1,
                              restricter=None):
     device = _get_model_device(decoder)
     if tokens is None:

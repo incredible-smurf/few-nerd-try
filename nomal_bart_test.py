@@ -20,11 +20,11 @@ def get_args():
     parser = argparse.ArgumentParser()
     # Required parameters
     # data
-    parser.add_argument("--N", default=10, type=str, 
+    parser.add_argument("--N", default=4, type=str, 
                         help="N ways" )
-    parser.add_argument("--K", default=5, type=str, 
+    parser.add_argument("--K", default=20, type=str, 
                         help="K shots" )
-    parser.add_argument("--Q", default=1, type=str, 
+    parser.add_argument("--Q", default=2, type=str, 
                         help="Query set size" )
 
     parser.add_argument("--model_name_or_path", default="facebook/bart-base", type=str, 
@@ -46,7 +46,7 @@ def get_args():
     
     parser.add_argument("--template", type=str, default="(9)")
     parser.add_argument("--decoder_template", type=str, default="(3)")
-    parser.add_argument("--max_length", default=200, type=int, 
+    parser.add_argument("--max_length", default=400, type=int, 
                         help="the max length of tokens.", )
     # contractive learning
     #parser.add_argument("--contrasive", type=bool, default=False)
@@ -68,15 +68,17 @@ def get_args():
     parser.add_argument('--if_tensorboard', action='store_true', default=True)
 
 
-    parser.add_argument("--bart_lr", default=1e-5, type=float, 
+    parser.add_argument("--bart_lr", default=1e-6, type=float, 
                         help="learning rate", )
-    parser.add_argument("--prompt_lr", default=1e-5, type=float, 
+    parser.add_argument("--prompt_lr", default=1e-6, type=float, 
                         help="learning rate", )
     parser.add_argument("--device", default='cuda:0', type=str, 
                         help="training device", )
     #parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--num_workers", default=0, type=int, 
                         help="workers number of dataloader", )
+    parser.add_argument("--tag_rate", default=2, type=int, 
+                        help="workers number of dataloader", )  #由于实体标签很难被生成  所以增加tag_score的比例使之更易被生成
     #metrics
     parser.add_argument("--metrics", default='seq2seqMetrics', type=str, 
                         help="evalate metircs", )
@@ -128,7 +130,7 @@ model = BartModel.from_pretrained('facebook/bart-large')
 
 
 model = LightSeq2SeqModel(model,args)
-model = SequenceGeneratorModel(model,tokenizer.bos_token_id,eos_token_id=tokenizer.eos_token_id)
+model = SequenceGeneratorModel(model,tokenizer.bos_token_id,eos_token_id=tokenizer.eos_token_id,pad_token_id=tokenizer.pad_token_id)
 
 
 if args.metrics == 'seq2seqMetrics':
@@ -136,7 +138,8 @@ if args.metrics == 'seq2seqMetrics':
 
 
 Framework = LightNerFrame(model,tokenizer,args,metrics=metrics,train_dataloader=train_dataloader,eval_dataloader=eval_dataloader,writer=writer)
-Framework.train(epoch=args.epoch,batch_size_each_epoch=args.batch_size_each_epoch)
+
+Framework.train(epoch=args.epoch,batch_size_each_epoch=args.batch_size_each_epoch,save_path=os.path.join(save_path,'models.pth'))
 print("train finished")
 
 

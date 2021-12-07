@@ -131,7 +131,7 @@ checkpoint = torch.load(args.pytorch_model_path)
 model.load_state_dict(checkpoint,strict=False)
 
 model = LightSeq2SeqModel(model,args)
-model = SequenceGeneratorModel(model,tokenizer.bos_token_id,eos_token_id=tokenizer.eos_token_id)
+model = SequenceGeneratorModel(model,tokenizer.bos_token_id,eos_token_id=tokenizer.eos_token_id,pad_token_id=tokenizer.pad_token_id)
 
 
 if args.metrics == 'seq2seqMetrics':
