@@ -52,3 +52,4 @@ def data2device(device,dict):
     for i in dict:
         if(isinstance(dict[i],torch.Tensor)):
             dict[i]=dict[i].to(device)
+        
