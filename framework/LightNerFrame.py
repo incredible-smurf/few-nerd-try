@@ -86,23 +86,17 @@ class LightNerFrame:
                                     )
                 #print("===========")
                 #print(pred['pred'],query['decoder_input_id'])
-                result=self.metrics.evaluate(query['span'],pred['pred'],query['decoder_input_id'])
-                fn+=result[0]
-                tp+=result[1]
-                fp+=result[2]
-        
-        fn/=check_times
-        tp/=check_times
-        fp/=check_times
+                self.metrics.evaluate(query['span'],pred['pred'],query['decoder_input_id'])
+        result = self.metrics.get_metric()
         loss_item/=check_times
         for name, param in tmp_model_state.items():
             self.model.state_dict()[name]=param
         if iters!=None:
             assert isinstance(iters,int)
         if self.writer!=None and iters !=None:
-            self.writer.add_scalars('Eval',{'loss_item':loss_item,'fn':fn,'fp':fp,'tp':tp},iters)
+            self.writer.add_scalars('Eval',{'loss_item':loss_item,'f':result['f'],'rec':result['rec'],'pre':result['pre']},iters)
 
-        return fn,tp,fp,loss_item
+        
 
     def train(self, epoch=100, batch_size_each_epoch=1000,save_path=None):
         parameters = self.__get_model_optim_paras()
@@ -143,7 +137,7 @@ class LightNerFrame:
                 data2device(self.device,support)
                 data2device(self.device,query)
                 #需要过拟合
-                for ____ in range(10):
+                for ____ in range(1):
                     pred = self.model(support['encoder_input_id'],
                                     support['decoder_input_id'],
                                     support['encoder_input_length'],
@@ -164,16 +158,12 @@ class LightNerFrame:
                                         src_seq_len=query['encoder_input_length']
                                         )
                 
-                    result=self.metrics.evaluate(query['span'],pred['pred'],query['decoder_input_id'])
-                    fn+=result[0]
-                    tp+=result[1]
-                    fp+=result[2]
+                    self.metrics.evaluate(query['span'],pred['pred'],query['decoder_input_id'])
+
                 
-            fn/=batch_size_each_epoch
-            tp/=batch_size_each_epoch
-            fp/=batch_size_each_epoch
-            loss_item/=batch_size_each_epoch
-            tqdm.write("fn {}, loss {} ".format(fn, loss_item))
+            result = self.metrics.get_metric()
+
+            tqdm.write("f {}, loss {} ".format(result['f'], loss_item))
             tqdm.write("pred format now {}".format(pred['pred']))
             if self.eval_dataloader != None:
                 if train_iter % self.args.eval_per_train_epoch == 0:
@@ -181,7 +171,7 @@ class LightNerFrame:
                     self.model.train()
 
             if self.writer!=None:
-                self.writer.add_scalars('Train',{'loss_item':loss_item,'fn':fn,'fp':fp,'tp':tp},train_iter)
+                self.writer.add_scalars('Train',{'loss_item':loss_item,'f':result['f'],'rec':result['rec'],'pre':result['pre']},train_iter)
             if save_path!=None:
                 torch.save(self.model,save_path)
                 if min_loss>loss_item:

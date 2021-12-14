@@ -1,5 +1,8 @@
 import torch
-from transformers.models.bart.light_ner_prompt_bart import *
+#light ner  bart
+#from transformers.models.bart.light_ner_prompt_bart import *
+#normal bert 
+from transformers.models.bart.modeling_bart import *
 from transformers.models.bart.configuration_bart import LightBartConfig
 from framework.LightNerFrame import LightNerFrame
 from models.light_ner import LightSeq2SeqModel,LightEncoder,LightDecoder
@@ -20,19 +23,17 @@ def get_args():
     parser = argparse.ArgumentParser()
     # Required parameters
     # data
-    parser.add_argument("--N", default=10, type=str, 
+    parser.add_argument("--N", default=4, type=str, 
                         help="N ways" )
-    parser.add_argument("--K", default=5, type=str, 
+    parser.add_argument("--K", default=10, type=str, 
                         help="K shots" )
     parser.add_argument("--Q", default=1, type=str, 
                         help="Query set size" )
 
     parser.add_argument("--model_name_or_path", default="facebook/bart-base", type=str, 
-                        help="Path to pre-trained model checkpoints or shortcut name selected in the list: " )
-    parser.add_argument("--output_dir", default='outputs/p_tuning/', type=str, 
-                        help="The output directory where the model predictions and checkpoints will be written.", )
-    parser.add_argument("--data_dir", default='dataset/wiki_NER/processed', type=str, 
-                        help="The input data dir.", )
+                        help="Path to pre-trained model checkpoints or shortcut name selected in the list: ")
+    parser.add_argument("--dataset_choice", default='conll03',choices=['conll03','few_nerd'], type=str, 
+                        help="The dataset to be trained", )
 
     parser.add_argument("--optimizer", default='AdamW', type=str, 
                         help="the optimizer", )
@@ -65,6 +66,9 @@ def get_args():
                             and it will override any value given in num_train_epochs", )
     parser.add_argument("--eval_per_train_epoch", default=10, type=int, 
                         help="when train function finish this epoch, then start a eval epoch", )
+    parser.add_argument("--tag_rate", default=2, type=int, 
+                        help="workers number of dataloader", )  #由于实体标签很难被生成  所以增加tag_score的比例使之更易被生成
+
     parser.add_argument('--if_tensorboard', action='store_true', default=True)
 
 
@@ -119,12 +123,23 @@ configs = LightBartConfig.from_pretrained('facebook/bart-large')
 configs.prompt_lenth = args.prompt_len
 
 #----data
-train_dataset =FewShotNERDataset(
-        './data/few_ner/intra/train.txt', tokenizer, args.N, args.K, args.Q, args.max_length,args=args)
-train_dataloader = data.DataLoader(train_dataset,num_workers=args.num_workers)
-eval_dataset =FewShotNERDataset(
-        './data/few_ner/intra/dev.txt', tokenizer, args.N, args.K, args.Q, args.max_length,args=args)
-eval_dataloader=data.DataLoader(eval_dataset,num_workers=args.num_workers)
+if args.dataset_choice =='few_nerd':
+    train_dataset =FewShotNERDataset(
+            './data/few_ner/intra/train.txt', tokenizer, args.N, args.K, args.Q, args.max_length,args=args)
+    train_dataloader = data.DataLoader(train_dataset,num_workers=args.num_workers)
+    eval_dataset =FewShotNERDataset(
+            './data/few_ner/intra/dev.txt', tokenizer, args.N, args.K, args.Q, args.max_length,args=args)
+    eval_dataloader=data.DataLoader(eval_dataset,num_workers=args.num_workers)
+elif args.dataset_choice =='conll03':
+    train_dataset =FewShotNERDataset(
+            './data/conll03/train.txt', tokenizer, args.N, args.K, args.Q, args.max_length,args=args)
+    train_dataloader = data.DataLoader(train_dataset,num_workers=args.num_workers)
+    eval_dataset =FewShotNERDataset(
+            './data/conll03/dev.txt', tokenizer, args.N, args.K, args.Q, args.max_length,args=args)
+    eval_dataloader=data.DataLoader(eval_dataset,num_workers=args.num_workers)
+else :raise NotImplementedError
+    
+
 
 model = BartModel(configs)
 checkpoint = torch.load(args.pytorch_model_path)
@@ -147,7 +162,3 @@ print("train finished")
 
 torch.save(model,os.path.join(save_path,'models.pth'))
 writer.close()
-
-
-
-

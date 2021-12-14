@@ -69,7 +69,7 @@ class Seq2SeqSpanMetric:
             self.fn += fn
             self.tp += tp
             self.fp += fp
-            return self.fn,self.tp,self.fp
+
 
     def get_metric(self, reset=True):
         res = {}

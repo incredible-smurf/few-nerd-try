@@ -7,7 +7,7 @@ from models.light_ner_without_entity_type import LightSeq2SeqModel,LightEncoder,
 from models.seq2seq_generator import SequenceGeneratorModel
 
 from metrics.seq2seqmetrics import Seq2SeqSpanMetric
-from data_process.without_entity_label import FewShotNERDataset
+from data_process.few_nerd_without_entity_label import FewShotNERDataset
 
 from transformers import BartTokenizer
 import torch
