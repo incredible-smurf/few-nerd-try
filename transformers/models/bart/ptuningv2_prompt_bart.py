@@ -1,6 +1,6 @@
-# Copyright 2021 The Fairseq Authors and The HuggingFace Inc. team. All rights reserved.
 # coding=utf-8
 #
+# Copyright 2021 The Fairseq Authors and The HuggingFace Inc. team. All rights reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -23,27 +23,43 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
-from transformers.utils.dummy_tokenizers_objects import BartTokenizerFast
 
-from transformers.activations import ACT2FN
-from transformers.file_utils import (
+from ...activations import ACT2FN
+from ...file_utils import (
     add_code_sample_docstrings,
     add_end_docstrings,
     add_start_docstrings,
+    add_start_docstrings_to_model_forward,
     replace_return_docstrings,
 )
-from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
+from ...modeling_outputs import (
+    BaseModelOutput,
+    BaseModelOutputWithPastAndCrossAttentions,
+    CausalLMOutputWithCrossAttentions,
     Seq2SeqLMOutput,
     Seq2SeqModelOutput,
+    Seq2SeqQuestionAnsweringModelOutput,
     Seq2SeqSequenceClassifierOutput,
 )
-from transformers.modeling_utils import PreTrainedModel
-from transformers.utils import logging
+from ...modeling_utils import PreTrainedModel
+from ...utils import logging
+from .configuration_bart import BartConfig
 from transformers.configuration_utils import PretrainedConfig
 
+logger = logging.get_logger(__name__)
 
-class LightBartConfig(PretrainedConfig):
+_CHECKPOINT_FOR_DOC = "facebook/bart-large"
+_CONFIG_FOR_DOC = "BartConfig"
+_TOKENIZER_FOR_DOC = "BartTokenizer"
+
+
+BART_PRETRAINED_MODEL_ARCHIVE_LIST = [
+    "facebook/bart-large",
+    # See all BART models at https://huggingface.co/models?filter=bart
+]
+
+
+class Promptv2BartConfig(PretrainedConfig):
     model_type = "bart"
     keys_to_ignore_at_inference = ["past_key_values"]
 
@@ -122,21 +138,6 @@ class LightBartConfig(PretrainedConfig):
     def hidden_size(self) -> int:
         return self.d_model
 
-
-
-logger = logging.get_logger(__name__)
-
-_CHECKPOINT_FOR_DOC = "facebook/bart-large"
-_CONFIG_FOR_DOC = "LightBartConfig"
-_TOKENIZER_FOR_DOC = "BartTokenizer"
-
-
-BART_PRETRAINED_MODEL_ARCHIVE_LIST = [
-    "facebook/bart-large",
-    # See all BART models at https://huggingface.co/models?filter=bart
-]
-
-
 def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
     """
     Shift input ids one token to the right.
@@ -200,7 +201,7 @@ class BartLearnedPositionalEmbedding(nn.Embedding):
         )
         return super().forward(positions + self.offset)
 
-#!note in light ner paper only this part is changed 
+
 class BartAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -211,31 +212,22 @@ class BartAttention(nn.Module):
         dropout: float = 0.0,
         is_decoder: bool = False,
         bias: bool = True,
-        prompt_len:int =8
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
-        self.prompt_len=prompt_len
         assert (
             self.head_dim * num_heads == self.embed_dim
         ), f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim} and `num_heads`: {num_heads})."
         self.scaling = self.head_dim ** -0.5
         self.is_decoder = is_decoder
 
-
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        
-        #lightner 
-        #!
-        self.prompt_len= prompt_len
-        self.prompt_k_matrix=nn.Parameter(torch.FloatTensor(num_heads,prompt_len,self.head_dim).fill_(0.))
-        self.prompt_v_matrix=nn.Parameter(torch.FloatTensor(num_heads,prompt_len,self.head_dim).fill_(0.))
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -245,7 +237,7 @@ class BartAttention(nn.Module):
         hidden_states: torch.Tensor,
         key_value_states: Optional[torch.Tensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.Tensor] = None, #batch_size,1,seq_len,seq_len
+        attention_mask: Optional[torch.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
@@ -288,35 +280,20 @@ class BartAttention(nn.Module):
             # if encoder bi-directional self-attention `past_key_value` is always `None`
             past_key_value = (key_states, value_states)
 
-        self.prompt_k_matrix_batch=self.prompt_k_matrix.expand(bsz,-1,-1,-1).reshape(bsz*self.num_heads,-1,self.head_dim)
-        self.prompt_v_matrix_batch=self.prompt_v_matrix.expand(bsz,-1,-1,-1).reshape(bsz*self.num_heads,-1,self.head_dim)
-
-
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
         query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
         key_states = key_states.view(*proj_shape)
         value_states = value_states.view(*proj_shape)
-        
-        #fewner part
-        #query_states (num_heads,seq_len,head_dim)
-        key_states=torch.cat((key_states,self.prompt_k_matrix_batch),dim=1)
-        
-
 
         src_len = key_states.size(1)
-        #之前(num_head,seq_len,seq_len)
-        #attn_weights (num_head,seq_len,promt_len+seq_len)
         attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
 
-
-        """ if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
+        if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
             raise ValueError(
                 f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
-            ) """
-        #modified
+            )
 
         if attention_mask is not None:
-            attention_mask = torch.cat((torch.zeros(bsz,1,tgt_len,self.prompt_len,device=key_states.device),attention_mask),dim=3)
             if attention_mask.size() != (bsz, 1, tgt_len, src_len):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
@@ -346,9 +323,6 @@ class BartAttention(nn.Module):
 
         attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
 
-        #lightner
-
-        value_states=torch.cat((value_states,self.prompt_v_matrix_batch),dim=1)
         attn_output = torch.bmm(attn_probs, value_states)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
@@ -366,14 +340,13 @@ class BartAttention(nn.Module):
 
 
 class BartEncoderLayer(nn.Module):
-    def __init__(self, config: LightBartConfig):
+    def __init__(self, config: Promptv2BartConfig):
         super().__init__()
         self.embed_dim = config.d_model
         self.self_attn = BartAttention(
             embed_dim=self.embed_dim,
             num_heads=config.encoder_attention_heads,
             dropout=config.attention_dropout,
-            prompt_len=config.prompt_lenth
         )
         self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
         self.dropout = config.dropout
@@ -382,7 +355,13 @@ class BartEncoderLayer(nn.Module):
         self.fc1 = nn.Linear(self.embed_dim, config.encoder_ffn_dim)
         self.fc2 = nn.Linear(config.encoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
-
+        self.prompt_len = config.prompt_lenth
+        self.hidden_size = self.embed_dim
+        self.prompt_mlp = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size),
+                                        nn.ReLU(),
+                                        nn.Dropout(0.1),
+                                        nn.Linear(self.hidden_size, self.hidden_size))
+        
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -392,7 +371,7 @@ class BartEncoderLayer(nn.Module):
     ):
         """
         Args:
-            hidden_states (:obj:`torch.FloatTensor`): input to the layer of shape `(seq_len, batch, embed_dim)`
+            hidden_states (:obj:`torch.FloatTensor`): input to the layer of shape `(seq_len+prompt_len, batch, embed_dim)`
             attention_mask (:obj:`torch.FloatTensor`): attention mask of size
                 `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
             layer_head_mask (:obj:`torch.FloatTensor`): mask for attention heads in a given layer of size
@@ -402,6 +381,11 @@ class BartEncoderLayer(nn.Module):
                 returned tensors for more detail.
         """
         residual = hidden_states
+
+        prompt_states,seq_states = torch.split(hidden_states,[self.prompt_len,hidden_states.size(1)-self.prompt_len],dim=1)
+        prompt_states = self.prompt_mlp(prompt_states)
+        hidden_states = torch.cat([prompt_states,seq_states],dim=1)
+
         hidden_states, attn_weights, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
@@ -435,7 +419,7 @@ class BartEncoderLayer(nn.Module):
 
 
 class BartDecoderLayer(nn.Module):
-    def __init__(self, config: LightBartConfig):
+    def __init__(self, config: BartConfig):
         super().__init__()
         self.embed_dim = config.d_model
 
@@ -444,7 +428,6 @@ class BartDecoderLayer(nn.Module):
             num_heads=config.decoder_attention_heads,
             dropout=config.attention_dropout,
             is_decoder=True,
-            prompt_len=config.prompt_lenth
         )
         self.dropout = config.dropout
         self.activation_fn = ACT2FN[config.activation_function]
@@ -456,7 +439,6 @@ class BartDecoderLayer(nn.Module):
             config.decoder_attention_heads,
             dropout=config.attention_dropout,
             is_decoder=True,
-            prompt_len=config.prompt_lenth
         )
         self.encoder_attn_layer_norm = nn.LayerNorm(self.embed_dim)
         self.fc1 = nn.Linear(self.embed_dim, config.decoder_ffn_dim)
@@ -577,7 +559,7 @@ class BartClassificationHead(nn.Module):
 
 
 class BartPretrainedModel(PreTrainedModel):
-    config_class = LightBartConfig
+    config_class = BartConfig
     base_model_prefix = "model"
     _keys_to_ignore_on_load_unexpected = [r"encoder\.version", r"decoder\.version"]
 
@@ -621,7 +603,7 @@ BART_START_DOCSTRING = r"""
     general usage and behavior.
 
     Parameters:
-        config (:class:`~transformers.LightBartConfig`):
+        config (:class:`~transformers.BartConfig`):
             Model configuration class with all the parameters of the model. Initializing with a config file does not
             load the weights associated with the model, only the configuration. Check out the
             :meth:`~transformers.PreTrainedModel.from_pretrained` method to load the model weights.
@@ -630,7 +612,7 @@ BART_START_DOCSTRING = r"""
 BART_GENERATION_EXAMPLE = r"""
     Summarization example::
 
-        >>> from transformers import BartTokenizer, BartForConditionalGeneration, LightBartConfig
+        >>> from transformers import BartTokenizer, BartForConditionalGeneration, BartConfig
 
         >>> model = BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn')
         >>> tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
@@ -767,15 +749,16 @@ class BartEncoder(BartPretrainedModel):
     :class:`BartEncoderLayer`.
 
     Args:
-        config: LightBartConfig
+        config: Promptv2BartConfig
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: LightBartConfig, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: Promptv2BartConfig, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
 
         self.dropout = config.dropout
         self.layerdrop = config.encoder_layerdrop
+        
 
         embed_dim = config.d_model
         self.padding_idx = config.pad_token_id
@@ -793,6 +776,8 @@ class BartEncoder(BartPretrainedModel):
         )
         self.layers = nn.ModuleList([BartEncoderLayer(config) for _ in range(config.encoder_layers)])
         self.layernorm_embedding = nn.LayerNorm(embed_dim)
+        self.prompt_len = config.prompt_lenth
+        self.prompt_embedding = nn.Parameter(torch.FloatTensor(self.prompt_len,embed_dim).fill_(0.))
 
         self.init_weights()
 
@@ -862,7 +847,12 @@ class BartEncoder(BartPretrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
-    
+
+        #prompt
+        bsz = inputs_embeds.size(0)
+        inputs_embeds = torch.cat([self.prompt_embedding.expand(bsz,-1,-1),inputs_embeds],dim=1)
+        input_shape = inputs_embeds.size()[:-1]
+
         embed_pos = self.embed_positions(input_shape)
 
         hidden_states = inputs_embeds + embed_pos
@@ -872,9 +862,10 @@ class BartEncoder(BartPretrainedModel):
         # expand attention_mask
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+            attention_mask = torch.cat([torch.zeros((bsz,self.prompt_len),device=inputs_embeds.device),attention_mask],dim=1)
             attention_mask = _expand_mask(attention_mask, inputs_embeds.dtype)
 
-        encoder_states = () if output_hidden_states else None
+        encoder_states = [] if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
         # check if head_mask has a correct number of layers specified if desired
@@ -884,7 +875,8 @@ class BartEncoder(BartPretrainedModel):
             ), f"The head_mask should be specified for {len(self.layers)} layers, but it is for {head_mask.size()[0]}."
         for idx, encoder_layer in enumerate(self.layers):
             if output_hidden_states:
-                encoder_states = encoder_states + (hidden_states,)
+                encoder_states .append(hidden_states)
+                  
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             dropout_probability = random.uniform(0, 1)
             if self.training and (dropout_probability < self.layerdrop):  # skip the layer
@@ -918,11 +910,16 @@ class BartEncoder(BartPretrainedModel):
                 all_attentions = all_attentions + (layer_outputs[1],)
 
         if output_hidden_states:
-            encoder_states = encoder_states + (hidden_states,)
+            encoder_states.append(hidden_states)
+            encoder_states = [ i[:,self.prompt_len:,:] for i in encoder_states]
 
+        #cut the prompt
+        hidden_states = hidden_states[:,self.prompt_len:,:]
+
+        
         if not return_dict:
             return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
-        return BaseModelOutputWithPast(
+        return BaseModelOutput(
             last_hidden_state=hidden_states, hidden_states=encoder_states, attentions=all_attentions
         )
 
@@ -932,11 +929,11 @@ class BartDecoder(BartPretrainedModel):
     Transformer decoder consisting of *config.decoder_layers* layers. Each layer is a :class:`BartDecoderLayer`
 
     Args:
-        config: LightBartConfig
+        config: BartConfig
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: LightBartConfig, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: BartConfig, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
         self.dropout = config.dropout
         self.layerdrop = config.decoder_layerdrop
@@ -1191,11 +1188,12 @@ class BartDecoder(BartPretrainedModel):
                 for v in [hidden_states, next_cache, all_hidden_states, all_self_attns, all_cross_attentions]
                 if v is not None
             )
-        return BaseModelOutputWithPast(
+        return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
+            cross_attentions=all_cross_attentions,
         )
 
 
@@ -1204,7 +1202,7 @@ class BartDecoder(BartPretrainedModel):
     BART_START_DOCSTRING,
 )
 class BartModel(BartPretrainedModel):
-    def __init__(self, config: LightBartConfig):
+    def __init__(self, config: BartConfig):
         super().__init__(config)
 
         padding_idx, vocab_size = config.pad_token_id, config.vocab_size
@@ -1229,7 +1227,13 @@ class BartModel(BartPretrainedModel):
     def get_decoder(self):
         return self.decoder
 
-
+    @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
+    @add_code_sample_docstrings(
+        tokenizer_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
+        output_type=Seq2SeqModelOutput,
+        config_class=_CONFIG_FOR_DOC,
+    )
     def forward(
         self,
         input_ids=None,
@@ -1273,9 +1277,9 @@ class BartModel(BartPretrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
-        # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutputWithPast when return_dict=True
-        elif return_dict and not isinstance(encoder_outputs, BaseModelOutputWithPast):
-            encoder_outputs = BaseModelOutputWithPast(
+        # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
+        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
+            encoder_outputs = BaseModelOutput(
                 last_hidden_state=encoder_outputs[0],
                 hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
@@ -1319,7 +1323,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
     base_model_prefix = "model"
     _keys_to_ignore_on_load_missing = [r"final_logits_bias", r"lm_head\.weight"]
 
-    def __init__(self, config: LightBartConfig):
+    def __init__(self, config: BartConfig):
         super().__init__(config)
         self.model = BartModel(config)
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
@@ -1353,7 +1357,9 @@ class BartForConditionalGeneration(BartPretrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-
+    @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
+    @replace_return_docstrings(output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
+    @add_end_docstrings(BART_GENERATION_EXAMPLE)
     def forward(
         self,
         input_ids=None,
@@ -1479,7 +1485,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
     BART_START_DOCSTRING,
 )
 class BartForSequenceClassification(BartPretrainedModel):
-    def __init__(self, config: LightBartConfig, **kwargs):
+    def __init__(self, config: BartConfig, **kwargs):
         super().__init__(config, **kwargs)
         self.model = BartModel(config)
         self.classification_head = BartClassificationHead(
@@ -1491,6 +1497,13 @@ class BartForSequenceClassification(BartPretrainedModel):
         self.model._init_weights(self.classification_head.dense)
         self.model._init_weights(self.classification_head.out_proj)
 
+    @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
+    @add_code_sample_docstrings(
+        tokenizer_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
+        output_type=Seq2SeqSequenceClassifierOutput,
+        config_class=_CONFIG_FOR_DOC,
+    )
     def forward(
         self,
         input_ids=None,
@@ -1577,6 +1590,126 @@ class BartForSequenceClassification(BartPretrainedModel):
         )
 
 
+@add_start_docstrings(
+    """
+    BART Model with a span classification head on top for extractive question-answering tasks like SQuAD (a linear
+    layer on top of the hidden-states output to compute `span start logits` and `span end logits`).
+    """,
+    BART_START_DOCSTRING,
+)
+class BartForQuestionAnswering(BartPretrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+
+        config.num_labels = 2
+        self.num_labels = config.num_labels
+
+        self.model = BartModel(config)
+        self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+
+        self.model._init_weights(self.qa_outputs)
+
+    @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
+    @add_code_sample_docstrings(
+        tokenizer_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
+        output_type=Seq2SeqQuestionAnsweringModelOutput,
+        config_class=_CONFIG_FOR_DOC,
+    )
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        decoder_input_ids=None,
+        decoder_attention_mask=None,
+        head_mask=None,
+        decoder_head_mask=None,
+        cross_attn_head_mask=None,
+        encoder_outputs=None,
+        start_positions=None,
+        end_positions=None,
+        inputs_embeds=None,
+        decoder_inputs_embeds=None,
+        use_cache=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        r"""
+        start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+            Labels for position (index) of the start of the labelled span for computing the token classification loss.
+            Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
+            are not taken into account for computing the loss.
+        end_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+            Labels for position (index) of the end of the labelled span for computing the token classification loss.
+            Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
+            are not taken into account for computing the loss.
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        if start_positions is not None and end_positions is not None:
+            use_cache = False
+
+        outputs = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            decoder_input_ids=decoder_input_ids,
+            decoder_attention_mask=decoder_attention_mask,
+            head_mask=head_mask,
+            decoder_head_mask=decoder_head_mask,
+            cross_attn_head_mask=cross_attn_head_mask,
+            encoder_outputs=encoder_outputs,
+            inputs_embeds=inputs_embeds,
+            decoder_inputs_embeds=decoder_inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs[0]
+
+        logits = self.qa_outputs(sequence_output)
+        start_logits, end_logits = logits.split(1, dim=-1)
+        start_logits = start_logits.squeeze(-1).contiguous()
+        end_logits = end_logits.squeeze(-1).contiguous()
+
+        total_loss = None
+        if start_positions is not None and end_positions is not None:
+            # If we are on multi-GPU, split add a dimension
+            if len(start_positions.size()) > 1:
+                start_positions = start_positions.squeeze(-1)
+            if len(end_positions.size()) > 1:
+                end_positions = end_positions.squeeze(-1)
+            # sometimes the start/end positions are outside our model inputs, we ignore these terms
+            ignored_index = start_logits.size(1)
+            start_positions = start_positions.clamp(0, ignored_index)
+            end_positions = end_positions.clamp(0, ignored_index)
+
+            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+            start_loss = loss_fct(start_logits, start_positions)
+            end_loss = loss_fct(end_logits, end_positions)
+            total_loss = (start_loss + end_loss) / 2
+
+        if not return_dict:
+            output = (
+                start_logits,
+                end_logits,
+            ) + outputs[1:]
+            return ((total_loss,) + output) if total_loss is not None else output
+
+        return Seq2SeqQuestionAnsweringModelOutput(
+            loss=total_loss,
+            start_logits=start_logits,
+            end_logits=end_logits,
+            past_key_values=outputs.past_key_values,
+            decoder_hidden_states=outputs.decoder_hidden_states,
+            decoder_attentions=outputs.decoder_attentions,
+            cross_attentions=outputs.cross_attentions,
+            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+            encoder_hidden_states=outputs.encoder_hidden_states,
+            encoder_attentions=outputs.encoder_attentions,
+        )
+
 
 class BartDecoderWrapper(BartPretrainedModel):
     """
@@ -1622,7 +1755,7 @@ class BartForCausalLM(BartPretrainedModel):
     def get_decoder(self):
         return self.model.decoder
 
-    
+    @replace_return_docstrings(output_type=CausalLMOutputWithCrossAttentions, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         input_ids=None,
@@ -1757,7 +1890,7 @@ class BartForCausalLM(BartPretrainedModel):
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
 
-        return BaseModelOutputWithPast(
+        return CausalLMOutputWithCrossAttentions(
             loss=loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
@@ -1787,6 +1920,3 @@ class BartForCausalLM(BartPretrainedModel):
         for layer_past in past:
             reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
         return reordered_past
-
-
-

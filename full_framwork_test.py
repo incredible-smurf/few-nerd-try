@@ -1,11 +1,10 @@
 import torch
 #light ner  bart
-#from transformers.models.bart.light_ner_prompt_bart import *
 #normal bert 
-from transformers.models.bart.modeling_bart import *
+#from transformers.models.bart.modeling_bart import *
 from transformers.models.bart.configuration_bart import LightBartConfig
 from framework.LightNerFrame import LightNerFrame
-from models.light_ner import LightSeq2SeqModel,LightEncoder,LightDecoder
+from models.light_ner import NerSeq2SeqModel,LightEncoder,LightDecoder
 from models.seq2seq_generator import SequenceGeneratorModel
 
 from metrics.seq2seqmetrics import Seq2SeqSpanMetric
@@ -49,6 +48,8 @@ def get_args():
     parser.add_argument("--decoder_template", type=str, default="(3)")
     parser.add_argument("--max_length", default=180, type=int, 
                         help="the max length of tokens.", )
+    parser.add_argument("--prompt_model", default='promptv2',choices=['lightner','promptv2','normal'], type=str, 
+                        help="choice of prompt_language_model", )
     # contractive learning
     #parser.add_argument("--contrasive", type=bool, default=False)
 
@@ -101,6 +102,7 @@ tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
 args.pad_id=tokenizer.pad_token_id
 
 
+torch.autograd.set_detect_anomaly(True)
 
 
 save_path='./checkpoint/'+str(time.time())
@@ -139,13 +141,19 @@ elif args.dataset_choice =='conll03':
     eval_dataloader=data.DataLoader(eval_dataset,num_workers=args.num_workers)
 else :raise NotImplementedError
     
-
+if args.prompt_model == 'promptv2':
+    from transformers.models.bart.ptuningv2_prompt_bart import *
+elif args.prompt_model =='lightner':
+    from transformers.models.bart.light_ner_prompt_bart import *
+elif args.prompt_model == 'normal':
+    from transformers.models.bart.modeling_bart import *
+else:raise NotImplementedError
 
 model = BartModel(configs)
 checkpoint = torch.load(args.pytorch_model_path)
 model.load_state_dict(checkpoint,strict=False)
 
-model = LightSeq2SeqModel(model,args)
+model = NerSeq2SeqModel(model,args)
 model = SequenceGeneratorModel(model,tokenizer.bos_token_id,eos_token_id=tokenizer.eos_token_id,pad_token_id=tokenizer.pad_token_id)
 
 

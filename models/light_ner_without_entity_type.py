@@ -6,14 +6,14 @@ from transformers.models.bart.light_ner_prompt_bart import *
 import torch.nn.functional as F
 from data_process.data_utils import seq_len_to_mask
 
-class LightSeq2SeqModel(torch.nn.Module):
+class NerSeq2SeqModel(torch.nn.Module):
     def __init__(self, Bartmodel, args):
         super().__init__()
         self.args=args
         num_tokens, _ = Bartmodel.encoder.embed_tokens.weight.shape
         Bartmodel.resize_token_embeddings(200+num_tokens)
-        self.encoder = LightEncoder(Bartmodel.encoder)
-        self.decoder = LightDecoder(Bartmodel.decoder, args.pad_id, args.N+4,tag_rate=args.tag_rate)
+        self.encoder = NerEncoder(Bartmodel.encoder)
+        self.decoder = NerDecoder(Bartmodel.decoder, args.pad_id, args.N+4,tag_rate=args.tag_rate)
         self.dummy_param = nn.Parameter(torch.empty(0))
 
     def forward(self, src_tokens, tgt_tokens, src_seq_len=None, tgt_seq_len=None, label_id=None):
@@ -58,7 +58,8 @@ class LightSeq2SeqModel(torch.nn.Module):
         return state
 
 
-class LightEncoder(torch.nn.Module):
+
+class NerEncoder(torch.nn.Module):
     def __init__(self, encoder) -> None:
         super().__init__()
         self.encoder = encoder
@@ -78,8 +79,13 @@ class LightEncoder(torch.nn.Module):
         hidden_states = dict.hidden_states
         return encoder_outputs, mask, hidden_states
 
+class PromptV2NerEncoder(NerEncoder):
+    def __init__(self, encoder) -> None:
+        super().__init__(encoder)
+        
+    
 
-class LightDecoder(torch.nn.Module):
+class NerDecoder(torch.nn.Module):
     def __init__(self, decoder, pad_token_id, src_start_id, use_encoder_mlp=True,avg_feature=True,tag_rate=None) -> None:
         super().__init__()
         self.decoder = decoder

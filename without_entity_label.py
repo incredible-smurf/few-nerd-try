@@ -3,7 +3,7 @@ from transformers.models.bart.modeling_bart import *
 from transformers.models.bart.configuration_bart import LightBartConfig
 from framework.LightNerFrame import LightNerFrame
 
-from models.light_ner_without_entity_type import LightSeq2SeqModel,LightEncoder,LightDecoder
+from models.light_ner_without_entity_type import NerSeq2SeqModel,LightEncoder,LightDecoder
 from models.seq2seq_generator import SequenceGeneratorModel
 
 from metrics.seq2seqmetrics import Seq2SeqSpanMetric
@@ -131,7 +131,7 @@ eval_dataloader=data.DataLoader(eval_dataset,num_workers=args.num_workers)
 model = BartModel.from_pretrained('facebook/bart-large')
 
 
-model = LightSeq2SeqModel(model,args)
+model = NerSeq2SeqModel(model,args)
 model = SequenceGeneratorModel(model,tokenizer.bos_token_id,eos_token_id=tokenizer.eos_token_id,pad_token_id=tokenizer.pad_token_id)
 
 

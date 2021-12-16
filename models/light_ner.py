@@ -6,7 +6,7 @@ from transformers.models.bart.light_ner_prompt_bart import *
 import torch.nn.functional as F
 from data_process.data_utils import seq_len_to_mask
 
-class LightSeq2SeqModel(torch.nn.Module):
+class NerSeq2SeqModel(torch.nn.Module):
     def __init__(self, Bartmodel, args):
         super().__init__()
         self.args=args
