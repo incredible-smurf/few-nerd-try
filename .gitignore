@@ -1,5 +1,7 @@
-data/few_ner/Few-NERD-main/
-checkpoint/*
+/data/few_ner/Few-NERD-main/
+/data/*
+
+/checkpoint/*
 */__pycache__
 transformer/checkpoint
 transformers/checkpoint

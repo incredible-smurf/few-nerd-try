@@ -419,7 +419,7 @@ class BartEncoderLayer(nn.Module):
 
 
 class BartDecoderLayer(nn.Module):
-    def __init__(self, config: BartConfig):
+    def __init__(self, config: Promptv2BartConfig):
         super().__init__()
         self.embed_dim = config.d_model
 
@@ -444,6 +444,13 @@ class BartDecoderLayer(nn.Module):
         self.fc1 = nn.Linear(self.embed_dim, config.decoder_ffn_dim)
         self.fc2 = nn.Linear(config.decoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.prompt_len = config.prompt_lenth
+        self.prompt_mlp = nn.Sequential(nn.Linear(self.embed_dim, self.embed_dim),
+                                        nn.ReLU(),
+                                        nn.Dropout(0.1),
+                                        nn.Linear(self.embed_dim, self.embed_dim))
+
+
 
     def forward(
         self,
@@ -475,7 +482,10 @@ class BartDecoderLayer(nn.Module):
                 returned tensors for more detail.
         """
         residual = hidden_states
-
+        prompt_states,seq_states = torch.split(hidden_states,[self.prompt_len,hidden_states.size(1)-self.prompt_len],dim=1)
+        prompt_states = self.prompt_mlp(prompt_states)
+        hidden_states = torch.cat([prompt_states,seq_states],dim=1)
+         
         # Self Attention
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
@@ -522,6 +532,7 @@ class BartDecoderLayer(nn.Module):
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
+
 
         outputs = (hidden_states,)
 
@@ -862,7 +873,7 @@ class BartEncoder(BartPretrainedModel):
         # expand attention_mask
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            attention_mask = torch.cat([torch.zeros((bsz,self.prompt_len),device=inputs_embeds.device),attention_mask],dim=1)
+            attention_mask = torch.cat([torch.ones((bsz,self.prompt_len),device=inputs_embeds.device),attention_mask],dim=1)
             attention_mask = _expand_mask(attention_mask, inputs_embeds.dtype)
 
         encoder_states = [] if output_hidden_states else None
@@ -933,7 +944,7 @@ class BartDecoder(BartPretrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: BartConfig, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: Promptv2BartConfig, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
         self.dropout = config.dropout
         self.layerdrop = config.decoder_layerdrop
@@ -941,6 +952,7 @@ class BartDecoder(BartPretrainedModel):
         self.max_target_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
 
+        embed_dim = config.d_model
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens
         else:
@@ -952,6 +964,8 @@ class BartDecoder(BartPretrainedModel):
         )
         self.layers = nn.ModuleList([BartDecoderLayer(config) for _ in range(config.decoder_layers)])
         self.layernorm_embedding = nn.LayerNorm(config.d_model)
+        self.prompt_len = config.prompt_lenth
+        self.prompt_embedding = nn.Parameter(torch.FloatTensor(self.prompt_len,embed_dim).fill_(0.))
 
         self.init_weights()
 
@@ -1086,6 +1100,14 @@ class BartDecoder(BartPretrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
 
+        bsz = inputs_embeds.size(0)
+        inputs_embeds = torch.cat([self.prompt_embedding.expand(bsz,-1,-1),inputs_embeds],dim=1)
+        if attention_mask !=None:
+            attention_mask = torch.cat([torch.ones((attention_mask.size(0),self.prompt_len),device=self.prompt_embedding.device)
+                ,attention_mask]
+                ,dim=1)
+        input_shape = inputs_embeds.size()[:-1]
+
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, input_shape, inputs_embeds, past_key_values_length
         )
@@ -1176,7 +1198,8 @@ class BartDecoder(BartPretrainedModel):
 
                 if encoder_hidden_states is not None:
                     all_cross_attentions += (layer_outputs[2],)
-
+        
+        hidden_states = hidden_states[:,self.prompt_len:,:]
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)

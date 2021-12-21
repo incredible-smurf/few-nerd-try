@@ -111,10 +111,13 @@ class LightNerFrame:
         scheduler = get_linear_schedule_with_warmup(
             optimizer, num_warmup_steps=10, num_training_steps=batch_size_each_epoch)
         train_dataloader = iter(self.train_dataloader)
-
+        
         min_loss=99999
+        if save_path!=None:
+            torch.save(self.model,save_path)
+
         for train_iter in tqdm(range(epoch)):
-            fn,tp,fp,loss_item=0,0,0,0
+            loss_item=0
             for __ in range(batch_size_each_epoch):
                 self.model.train()
                 support, query = next(train_dataloader)
@@ -137,7 +140,7 @@ class LightNerFrame:
                 data2device(self.device,support)
                 data2device(self.device,query)
                 #需要过拟合
-                for ____ in range(1):
+                for ____ in range(5):
                     pred = self.model(support['encoder_input_id'],
                                     support['decoder_input_id'],
                                     support['encoder_input_length'],
@@ -149,7 +152,7 @@ class LightNerFrame:
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
-                loss_item +=loss.item()
+                loss_item += loss.item()
                 #fn,tp,fp =self.metrics.evluate(support['span'],pred,support['decoder_input_id'])
                 with torch.no_grad():
                     self.model.eval()
@@ -178,89 +181,8 @@ class LightNerFrame:
                     min_loss=loss_item
                     torch.save(self.model,save_path+'tmp_best')
 
-
-
-    #for debug
-    def train_de(self, epoch=1, batch_size_each_epoch=1):
-        parameters = self.__get_model_optim_paras()
-        self.model.train()
-        self.model.to(self.device)
-        if self.args.optimizer == 'AdamW':
-            optimizer = optim.AdamW(self.model.parameters(),lr=self.args.bart_lr)
-
-        if self.args.loss_func == 'Seq2SeqLoss':
-            loss_func = Seq2SeqLoss
-        
-        #scheduler = get_linear_schedule_with_warmup(
-            #optimizer, num_warmup_steps=10, num_training_steps=batch_size_each_epoch)
-        train_dataloader = iter(self.train_dataloader)
-
-        for train_iter in tqdm(range(epoch)):
-            fn,tp,fp,loss_item=0,0,0,0
-            self.model.train()
-            support, query = next(train_dataloader)
-            query['encoder_input_id'] = query['encoder_input_id'].squeeze(
-                    0)
-            query['decoder_input_id'] = query['decoder_input_id'].squeeze(
-                0)
-            query['encoder_input_length'] = query['encoder_input_length'].squeeze(
-                0)
-            query['decoder_input_length'] = query['decoder_input_length'].squeeze(
-                0)
-            support['encoder_input_id'] = support['encoder_input_id'].squeeze(
-                0)
-            support['decoder_input_id'] = support['decoder_input_id'].squeeze(
-                0)
-            support['encoder_input_length'] = support['encoder_input_length'].squeeze(
-                0)
-            support['decoder_input_length'] = support['decoder_input_length'].squeeze(
-                0)
-            data2device(self.device,support)
-            data2device(self.device,query)
-            for j in range(500):
-                self.model.train()
-                pred = self.model(support['encoder_input_id'],
-                                support['decoder_input_id'],
-                                support['encoder_input_length'],
-                                support['decoder_input_length'],
-                                support['label_vocab_id'])
-
-                loss = loss_func(support['decoder_input_id'],support['decoder_input_length'],pred['pred'])
-                loss.backward()
-                optimizer.step()
-                #scheduler.step()
-                optimizer.zero_grad()
-                loss_item +=loss.item()
-                #fn,tp,fp =self.metrics.evluate(support['span'],pred,support['decoder_input_id'])
-                with torch.no_grad():
-                    self.model.eval()
-                    pred = self.model.predict(support['encoder_input_id'],
-                                        support['label_vocab_id'],
-                                        src_seq_len=support['encoder_input_length']
-                                        )
-                
-                    result=self.metrics.evaluate(support['span'],pred['pred'],support['decoder_input_id'])
-                    fn+=result[0]
-                    tp+=result[1]
-                    fp+=result[2]
-                print('loss',loss.item(),'epoch',j)
-                if j %10==0:
-                    print('pred',pred['pred'])
-                
-            fn/=batch_size_each_epoch
-            tp/=batch_size_each_epoch
-            fp/=batch_size_each_epoch
-            loss_item/=batch_size_each_epoch
-            tqdm.write("fn {}, loss {} ".format(fn, loss_item))
-            tqdm.write("pred format now {}".format(pred['pred']))
-            if self.eval_dataloader != None:
-                if train_iter % self.args.eval_per_train_epoch == 0:
-                    self.evaluate(iters=train_iter)
-                    self.model.train()
-
-            if self.writer!=None:
-                self.writer.add_scalars('Train',{'loss_item':loss_item,'fn':fn,'fp':fp,'tp':tp},train_iter)
-
+    # pretrain language model for ner task
+    
 
     """
     给定source的内容，输出generate的内容
@@ -279,3 +201,85 @@ class LightNerFrame:
         return self.model.predict(src_tokens,src_seq_len=src_seq_len,label_id=label_id)
                 
 
+class NerPretrainFramework:
+    def __init__(self,model,args,writer=None,metrics=None) -> None:
+        self.model = model
+        self.args = args 
+        self.writer = writer
+        self.device = torch.device(args.device)
+        self.metrics=metrics
+    
+    def __get_model_optim_paras(self):
+        parameters = []
+        params = {'lr': self.args.bart_lr, 'weight_decay': 1e-2}
+        params['params'] = [param for name,
+                            param in self.model.named_parameters() if not ('prompt' in name)]
+
+        params = {'lr': self.args.prompt_lr, 'weight_decay': 1e-2}
+        params['params'] = [param for name,
+                            param in self.model.named_parameters() if ('prompt' in name)]
+        parameters.append(params)
+        return parameters
+
+    def pretrain(self,train_data_loader,eval_data_loader=None,save_path=None):
+        parameters = self.__get_model_optim_paras()
+        min_loss=9999999999
+        self.model.train()
+        self.model.to(self.device)
+        if self.args.optimizer == 'AdamW':
+            optimizer = optim.AdamW(parameters)
+
+        if self.args.loss_func == 'Seq2SeqLoss':
+            loss_func = Seq2SeqLoss
+        
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer, num_warmup_steps=10, num_training_steps=self.args.pretrian_epoch)
+        for train_iter in tqdm(range(self.args.pretrian_epoch)):
+            loss_item =0
+            for data_dic in train_data_loader:
+                data2device(self.device,data_dic)
+                pred = self.model(data_dic['encoder_input_id'],
+                                data_dic['decoder_input_id'],
+                                data_dic['encoder_input_length'],
+                                data_dic['decoder_input_length'],
+                                data_dic['label_vocab_id'])
+                loss = loss_func(data_dic['decoder_input_id'],data_dic['decoder_input_length'],pred['pred'])
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                loss_item+=loss.item()
+                self.metrics.evaluate(data_dic['span'],pred['pred'],data_dic['decoder_input_id'])
+            
+            result = self.metrics.get_metric()
+            tqdm.write("f {}, loss {} ".format(result['f'], loss_item))
+            tqdm.write("pred format now {}".format(pred['pred']))
+
+            if self.writer!=None:
+                self.writer.add_scalars('PreTrain-Train',{'loss_item':loss_item,'f':result['f'],'rec':result['rec'],'pre':result['pre']},train_iter)
+
+            
+            #eval
+            if (train_iter % self.args.pretrian_eval_time == 0) and eval_data_loader!=None:
+                loss_item =0
+                with torch.no_grad():
+                    self.model.eval()
+                    for query in eval_data_loader:
+                        pred = self.model.predict(query['encoder_input_id'],
+                                            query['label_vocab_id'],
+                                            src_seq_len=query['encoder_input_length']
+                                            )
+                        self.metrics.evaluate(query['span'],pred['pred'],query['decoder_input_id'])
+                        loss = loss_func(query['decoder_input_id'],query['decoder_input_length'],pred['pred'])
+                        loss_item+=loss.item()
+                result = self.metrics.get_metric()
+                if self.writer!=None:
+                    self.writer.add_scalars('PreTrain-Eval',{'loss_item':loss_item,'f':result['f'],'rec':result['rec'],'pre':result['pre']},train_iter)
+                self.model.train()
+            
+            if save_path!=None:
+                torch.save(self.model,save_path)
+                if min_loss>loss_item:
+                    min_loss=loss_item
+                    torch.save(self.model,save_path+'tmp_best')
+                

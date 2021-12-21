@@ -5,10 +5,14 @@ import torch
 import random
 import os
 import numpy as np
-from transformers import BertTokenizer, BartTokenizer
+from transformers import BertTokenizer, BartTokenizer, file_utils
 from torch.nn.utils.rnn import pad_sequence
-import argparse
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+
+import pickle
+from transformers.utils.dummy_pt_objects import NoRepeatNGramLogitsProcessor
+from data_process.data_utils import expand_tag_words
+#from data_utils import expand_tag_words
 
 # entity classification
 
@@ -312,6 +316,7 @@ class FewShotConll03Dataset(data.Dataset):
         return label_id
 
     def __contact_template_for_bart(self, target_classes, raw_tokens, labels):
+        raw_tokens, labels=expand_tag_words(self.tokenizer,raw_tokens, labels)
         raw_tokens = raw_tokens[:self.args.max_length-3]
         labels =labels [:self.args.max_length-3]
         assert len(raw_tokens) == len(labels)
@@ -601,49 +606,267 @@ def bart_data_collator(data):
 
     return batch_support, batch_query
 
+def bart_pretrain_data_collator(data):
+    batch_data = {}
+    data_dic = data
+    pad_id = BartTokenizer.from_pretrained('facebook/bart-base').pad_token_id
+
+    for i in range(len(data_dic)):
+        piece_data = data_dic[i]
+        for key in piece_data:
+            if key not in batch_data:
+                batch_data[key] = []
+        for key in piece_data:
+            batch_data[key].append(piece_data[key])
+
+
+    batch_data['encoder_input_id'] = batch_convert_ids_to_tensors(
+        batch_data['encoder_input_id'], 
+        pad_id)#bart pad
+
+
+
+    for i in batch_data:
+        try:
+            batch_data[i] =torch.tensor(batch_data[i])
+        # do nothing
+        except Exception:
+            tmp = None
+
+    return batch_data
+
+class NormalConll03Dataset(data.Dataset):
+    def __init__(self,file_path,tokenizer,args=None) -> None:
+        super().__init__()
+        self.path = file_path
+        self.__load_data_from_file__(self.path,cache_path=self.path+'.cache')
+        self.class2sampleid = {}
+        self.tokenizer = tokenizer
+        self.args=args
+        self.use_bart_augment=False
+        self.Ptuing = args.p_tuning
+        self.N = 4 #Conll03 has four entity type
+        self.label2id={'O':0,'MISC':1,'LOC':2,'PER':3,'ORG':4}
+    
+    
+    def __load_data_from_file__(self, filepath,cache_path=None):
+        if cache_path!=None and os.path.exists(cache_path):
+            with open(cache_path,'rb') as f:
+                self.samples = pickle.load(f)
+        else :
+            samples = []
+            with open(filepath, 'r', encoding='utf-8')as f:
+                lines = f.readlines()
+            samplelines = []
+            for line in lines:
+                line = line.strip()
+                if line:
+                    samplelines.append(line)
+                else:
+                    sample = Sample(samplelines)
+                    samples.append(sample)
+            self.samples = samples
+
+            if cache_path!=None:
+                with open(cache_path ,'wb') as f:
+                    pickle.dump(samples, f)
+
+
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self,index):
+        sample = self.samples[index]
+        tokens = sample.words
+        tag = sample.tags
+        return_dic = self.__contact_template_for_bart(tokens,tag)
+        return return_dic
+
+    def __contact_template_for_bart(self, raw_tokens, labels):
+        raw_tokens, labels=expand_tag_words(self.tokenizer,raw_tokens, labels)
+        if self.args!=None:
+            raw_tokens = raw_tokens[:self.args.max_length-3]
+            labels =labels [:self.args.max_length-3]
+        assert len(raw_tokens) == len(labels)
+        labels = [self.label2id[i] for i in labels]
+
+        entity_list, entity_label_list = self._get_entity_list(
+            raw_tokens, labels)
+        return_dic = {}
+        if self.Ptuing:
+            prompt = self._get_encoder_ptuning_template(self.P_template_len)
+  
+        ori_input_token_id = self.tokenizer.convert_tokens_to_ids(raw_tokens)
+
+
+        if self.use_bart_augment:
+            pass
+
+        if self.Ptuing:
+            inserted_input_tokens = self.tokenizer.convert_tokens_to_ids(
+                prompt + raw_tokens)
+            return_encoder_sentence_id = [
+                self.tokenizer.bos_token_id] + inserted_input_tokens + [self.tokenizer.eos_token_id]
+
+        else:
+            return_encoder_sentence_id = [
+                self.tokenizer.bos_token_id] + ori_input_token_id + [self.tokenizer.eos_token_id]
+
+        #decoder_input_sentence_id = self.__get_decoder_output_sentence_id(target_classes,entity_list,entity_label_list,raw_tokens)
+
+        self.target_shift = self.N + 4  # +4 <eos> & <bos>& <pad> & O tag
+        if self.Ptuing:
+            self.target_shift += len(prompt)
+
+        target_span = []
+        decoder_input_sentence_id = [self.tokenizer.bos_token_id]
+
+        for i in range(len(entity_list)):
+            assert len(entity_list[i])==2
+
+            entity_list[i][0]+=1 # bos 
+            entity_list[i][1]+=1
+
+            target_span .append(entity_list[i])
+            target_span[i].append(entity_label_list[i])
+            decoder_input_sentence_id.append(
+                entity_list[i][0]+self.target_shift)  # start
+            decoder_input_sentence_id.append(
+                entity_list[i][1]+self.target_shift)  # end
+            decoder_input_sentence_id.append(
+                entity_label_list[i]+3)  # entity_type
+
+        decoder_input_sentence_id += [self.tokenizer.eos_token_id]  # <eos>
+
+        return_dic['span'] = target_span
+        return_dic['origin_input_id'] = ori_input_token_id
+        return_dic['encoder_input_id'] = return_encoder_sentence_id
+        return_dic['encoder_input_length'] = len(return_encoder_sentence_id)
+        return_dic['decoder_input_id'] = decoder_input_sentence_id
+        return_dic['decoder_input_length'] = len(decoder_input_sentence_id)
+
+        
+        return_dic['raw_tokens']=raw_tokens
+        return_dic['raw_labels']=labels
+        return return_dic
+
+    def _get_entity_list(self, tokens, labels):
+        entity_list = []
+        entity_label_list = []
+        assert len(tokens) == len(labels)
+        entity_st_ptr = -1
+        entity_ed_ptr = -1
+        entity_label = -1
+        for i in range(len(tokens)):
+            if(labels[i] != 0):
+                if(entity_st_ptr == -1):
+                    entity_st_ptr = i
+                    entity_ed_ptr = i
+                    entity_label = labels[i]
+                else:
+                    entity_ed_ptr += 1
+            else:
+                if(entity_st_ptr != -1):
+                    entity_list.append([entity_st_ptr, entity_ed_ptr])
+                    entity_label_list.append(entity_label)
+                    entity_st_ptr = -1
+                    entity_ed_ptr = -1
+                    entity_label = -1
+        if(entity_st_ptr != -1):
+            entity_list.append([entity_st_ptr, entity_ed_ptr])
+            entity_label_list.append(entity_label)
+        del entity_st_ptr, entity_ed_ptr, entity_label, i
+
+        return entity_list, entity_label_list
 
 def get_args():
+    import argparse
     parser = argparse.ArgumentParser()
     # Required parameters
     # data
-    parser.add_argument("--model_name_or_path", default="facebook/bart-base", type=str,
-                        help="Path to pre-trained model checkpoints or shortcut name selected in the list: ")
-    parser.add_argument("--output_dir", default='outputs/p_tuning/', type=str,
-                        help="The output directory where the model predictions and checkpoints will be written.", )
-    parser.add_argument("--data_dir", default='dataset/wiki_NER/processed', type=str,
-                        help="The input data dir.", )
-    # prompt learning
-    parser.add_argument("--p_tuning", type=bool, default=True)
-    parser.add_argument("--entity_pseudo_token", type=str, default='[PROMPT]')
-    parser.add_argument("--entity_split_token", type=str,
-                        default='[ENTITY_SPLIT]')
+    parser.add_argument("--N", default=4, type=str, 
+                        help="N ways" )
+    parser.add_argument("--K", default=10, type=str, 
+                        help="K shots" )
+    parser.add_argument("--Q", default=1, type=str, 
+                        help="Query set size" )
 
+    parser.add_argument("--model_name_or_path", default=None, type=str, 
+                        help="Path to pre-trained model")
+    parser.add_argument("--dataset_choice", default='conll03',choices=['conll03','few_nerd'], type=str, 
+                        help="The dataset to be trained", )
+
+    parser.add_argument("--optimizer", default='AdamW', type=str, 
+                        help="the optimizer", )
+    parser.add_argument("--loss_func", default='Seq2SeqLoss', type=str, 
+                        help="the optimizer", )
+
+    #pretrain_setting
+    parser.add_argument("--need_pretrian", default=False, type=bool, 
+                        help="whether start pretrain or not", )
+    parser.add_argument("--pretrian_epoch", default=80, type=int, 
+                        help="how many epoch for pretrain", ) 
+    parser.add_argument("--pretrian_batch_size", default=40, type=int, 
+                        help="how many batch for pretrain", ) 
+    parser.add_argument("--only_pretrian", default=True, type=bool, 
+                        help="Only pretrain the model,when pretrain is over, the program will exit", )                   
+    parser.add_argument("--pretrian_dataset", default='conll03', type=str, choices=['conll03'],
+                        help="choose dataset for pretrain", )    
+    parser.add_argument("--pretrian_eval_time", default=10, type=int,
+                        help="every X epoch evaluate one times", ) 
+    
+    # prompt learning
+    parser.add_argument("--p_tuning", type=bool, default=False)
+    parser.add_argument("--entity_pseudo_token", type=str, default='[PROMPT]')
+    parser.add_argument("--entity_split_token", type=str, default='[ENTITY_SPLIT]')
+    
     parser.add_argument("--template", type=str, default="(9)")
     parser.add_argument("--decoder_template", type=str, default="(3)")
+    parser.add_argument("--max_length", default=100, type=int, 
+                        help="the max length of tokens.", )
+    parser.add_argument("--prompt_model", default='promptv2',choices=['lightner','promptv2','normal'], type=str, 
+                        help="choice of prompt_language_model", )
+    
 
-    # contractive learning
-    parser.add_argument("--contrasive", type=bool, default=False)
 
-    # train/dev settting
-    parser.add_argument("--bsz_per_device", default=3, type=int,
-                        help="train/dev batch size per device", )
-    parser.add_argument("--epoch", default=50, type=int,
+    #few shot train/dev setting
+    """ parser.add_argument("--bsz_per_device", default=3, type=int, 
+                        help="train/dev batch size per device", ) """
+    parser.add_argument("--epoch", default=100, type=int, 
                         help="the number of training epochs.", )
-    parser.add_argument("--max_steps", default=1000000, type=int,
+    parser.add_argument("--batch_size_each_epoch", default=100, type=int, 
+                        help="the batch of few shot set per epoch.", )
+    parser.add_argument("--max_steps", default=1000000, type=int, 
                         help="the number of training steps. \
                             If set to a positive number, \
                             the total number of training steps to perform. \
                             and it will override any value given in num_train_epochs", )
-    parser.add_argument("--lr", default=1e-5, type=float,
+    parser.add_argument("--eval_per_train_epoch", default=10, type=int, 
+                        help="when train function finish this epoch, then start a eval epoch", )
+    parser.add_argument("--tag_rate", default=2, type=int, 
+                        help="workers number of dataloader", )  #由于实体标签很难被生成  所以增加tag_score的比例使之更易被生成
+
+    parser.add_argument('--if_tensorboard', action='store_true', default=True)
+
+
+    parser.add_argument("--bart_lr", default=2e-5, type=float, 
                         help="learning rate", )
-    parser.add_argument("--local_rank", type=int, default=-1,
-                        help="For distributed training: local_rank")
+    parser.add_argument("--prompt_lr", default=1e-4, type=float, 
+                        help="learning rate", )
+    parser.add_argument("--device", default='cuda:0', type=str, 
+                        help="training device", )
+    parser.add_argument("--num_workers", default=0, type=int, 
+                        help="workers number of dataloader", )
+    #metrics
+    parser.add_argument("--metrics", default='seq2seqMetrics', type=str, 
+                        help="evalate metircs", )
+
 
     args = parser.parse_args()
 
-    args.template = eval(args.template) if type(
-        args.template) is not tuple else args.template
-    args.decoder_template = eval(args.decoder_template)
+    args.template = eval(args.template) if type(args.template) is not tuple else args.template
+    args.decoder_template=eval(args.decoder_template)
+     
 
     return args
 
@@ -652,10 +875,10 @@ if __name__ == "__main__":
     # n_gram dataset
     N = 5
     tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
-    dataset = FewShotNERDataset(
-        './data/few_ner/intra/dev.txt', tokenizer, N, 2, 2, 122, args=get_args())
-    loader = iter(torch.utils.data.DataLoader(
-        dataset, batch_size=2, collate_fn=bart_data_collator))
-    for i in range(10000):
-        t1 = next(loader)
+    dataset = NormalConll03Dataset(
+        './data/conll03/test.txt',tokenizer=tokenizer,args = get_args())
+    loader = data.DataLoader(dataset,batch_size=2,collate_fn=bart_pretrain_data_collator)
+    print(dataset[0])
+    print(len(dataset))
+    print(next(iter(loader)))
     # print(t['seg'].shape)
